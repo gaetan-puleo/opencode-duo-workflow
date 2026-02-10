@@ -1,0 +1,13 @@
+export type Logger = {
+  debug: (...args: unknown[]) => void
+  info: (...args: unknown[]) => void
+  warn: (...args: unknown[]) => void
+  error: (...args: unknown[]) => void
+}
+
+export const createLogger = (): Logger => ({
+  debug: () => {},
+  info: () => {},
+  warn: () => {},
+  error: () => {},
+})

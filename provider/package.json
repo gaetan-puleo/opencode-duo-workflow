@@ -1,0 +1,14 @@
+{
+  "name": "opencode-gitlab-duo-agentic-provider",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "dependencies": {
+    "@ai-sdk/provider": "2.0.1",
+    "isomorphic-ws": "^5.0.0",
+    "neverthrow": "^8.2.0",
+    "uuid": "^11.0.5",
+    "zod": "^3.25.76"
+  }
+}
