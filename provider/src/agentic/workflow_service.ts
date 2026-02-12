@@ -35,6 +35,11 @@ export class WorkflowCreateError extends Error {
   }
 }
 
+function buildApiUrl(instanceUrl: string, path: string): string {
+  const base = instanceUrl.endsWith("/") ? instanceUrl : `${instanceUrl}/`
+  return new URL(path.replace(/^\//, ""), base).toString()
+}
+
 export async function createWorkflow(
   instanceUrl: string,
   apiKey: string,
@@ -42,7 +47,7 @@ export async function createWorkflow(
   workflowDefinition: WorkflowType,
   containerParams?: { projectId?: string; namespaceId?: string },
 ): Promise<string> {
-  const url = new URL("/api/v4/ai/duo_workflows/workflows", instanceUrl)
+  const url = buildApiUrl(instanceUrl, "/api/v4/ai/duo_workflows/workflows")
   const response = await fetch(url.toString(), {
     method: "POST",
     headers: {
@@ -76,7 +81,7 @@ export async function getWorkflowToken(
   apiKey: string,
   workflowDefinition: WorkflowType,
 ): Promise<GenerateTokenResponse> {
-  const url = new URL("/api/v4/ai/duo_workflows/direct_access", instanceUrl)
+  const url = buildApiUrl(instanceUrl, "/api/v4/ai/duo_workflows/direct_access")
   const response = await fetch(url.toString(), {
     method: "POST",
     headers: {

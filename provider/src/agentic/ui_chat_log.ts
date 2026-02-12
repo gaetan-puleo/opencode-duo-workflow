@@ -31,31 +31,28 @@ const BaseMessageSchema = z.object({
   additional_context: z.unknown(),
 })
 
-export const WorkflowMessageSchema = BaseMessageSchema.extend({
+const WorkflowMessageSchema = BaseMessageSchema.extend({
   message_type: z.enum(["user", "agent"]),
   tool_info: z.null(),
 })
 
-export const WorkflowRequestSchema = BaseMessageSchema.extend({
+const WorkflowRequestSchema = BaseMessageSchema.extend({
   message_type: z.literal("request"),
   tool_info: ToolInfoSchema,
 })
 
-export const WorkflowToolSchema = BaseMessageSchema.extend({
+const WorkflowToolSchema = BaseMessageSchema.extend({
   message_type: z.literal("tool"),
   tool_info: z.union([ToolInfoSchema, z.null()]),
 })
 
-export const ChatLogSchema = z.discriminatedUnion("message_type", [
+const ChatLogSchema = z.discriminatedUnion("message_type", [
   WorkflowMessageSchema,
   WorkflowRequestSchema,
   WorkflowToolSchema,
 ])
 
-export type WorkflowMessage = z.infer<typeof WorkflowMessageSchema>
-export type WorkflowRequest = z.infer<typeof WorkflowRequestSchema>
-export type WorkflowTool = z.infer<typeof WorkflowToolSchema>
-export type ChatLog = z.infer<typeof ChatLogSchema>
+type ChatLog = z.infer<typeof ChatLogSchema>
 
 type CheckpointData = {
   channel_values: {

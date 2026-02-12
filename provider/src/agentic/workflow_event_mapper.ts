@@ -1,12 +1,11 @@
 import type { DuoWorkflowEvent, ToolInputDisplay } from "./types"
 import { extractUiChatLog } from "./ui_chat_log"
-import { ToolInputFormatter } from "./tool_input_formatter"
 import type { Logger } from "./logger"
 
 export type AgentEvent =
   | { type: "TEXT_CHUNK"; messageId: string; content: string; timestamp: number }
   | {
-      type: "TOOL_START" | "TOOL_AWAITING_APPROVAL"
+      type: "TOOL_AWAITING_APPROVAL"
       toolId: string
       toolName: string
       input: ToolInputDisplay
@@ -16,13 +15,11 @@ export type AgentEvent =
   | { type: "ERROR"; message: string; timestamp: number }
 
 export class WorkflowEventMapper {
-  #toolInputFormatter: ToolInputFormatter
   #logger: Logger
   #lastMessageContent = ""
   #lastMessageId = ""
 
-  constructor(toolInputFormatter: ToolInputFormatter, logger: Logger) {
-    this.#toolInputFormatter = toolInputFormatter
+  constructor(logger: Logger) {
     this.#logger = logger
   }
 
@@ -43,7 +40,7 @@ export class WorkflowEventMapper {
     return JSON.stringify(args1) === JSON.stringify(args2)
   }
 
-  async mapWorkflowEvent(duoEvent: DuoWorkflowEvent): Promise<AgentEvent[]> {
+  mapWorkflowEvent(duoEvent: DuoWorkflowEvent): AgentEvent[] {
     const events: AgentEvent[] = []
     const workflowMessagesResult = extractUiChatLog(duoEvent)
     if (workflowMessagesResult.isErr()) {
@@ -56,6 +53,7 @@ export class WorkflowEventMapper {
 
     const latestMessage = workflowMessages[workflowMessages.length - 1]
     const latestMessageIndex = workflowMessages.length - 1
+    this.#logger.warn(`mapper: ${workflowMessages.length} messages, latest[${latestMessageIndex}]=${latestMessage.message_type}`)
 
     switch (latestMessage.message_type) {
       case "user":
@@ -103,20 +101,19 @@ export class WorkflowEventMapper {
       }
 
       case "request": {
+        this.#logger.warn(`mapper request: tool=${latestMessage.tool_info.name} args=${JSON.stringify(latestMessage.tool_info.args).slice(0, 200)}`)
         events.push({
           type: "TOOL_AWAITING_APPROVAL",
           toolId: `${latestMessageIndex}`,
           toolName: latestMessage.tool_info.name,
-          input: await this.#toolInputFormatter.formatToolInput(
-            latestMessage.tool_info.name,
-            latestMessage.tool_info.args,
-          ),
+          input: { tool: "generic" as const, name: latestMessage.tool_info.name, args: latestMessage.tool_info.args },
           timestamp: this.#parseTimestamp(latestMessage.timestamp),
         })
         break
       }
 
       case "tool": {
+        this.#logger.warn(`mapper tool: name=${latestMessage.tool_info?.name ?? "null"} hasResponse=${!!latestMessage.tool_info?.tool_response} contentLen=${latestMessage.content?.length ?? 0}`)
         let approvalRequestIndex: number | undefined
         for (let i = latestMessageIndex - 1; i >= 0; i -= 1) {
           const prevMsg = workflowMessages[i]
@@ -136,14 +133,12 @@ export class WorkflowEventMapper {
         const timestamp = this.#parseTimestamp(latestMessage.timestamp)
 
         if (approvalRequestIndex === undefined) {
+          const toolName = latestMessage.tool_info?.name || "unknown tool"
           events.push({
             type: "TOOL_AWAITING_APPROVAL",
             toolId,
-            toolName: latestMessage.tool_info?.name || "unknown tool",
-            input: await this.#toolInputFormatter.formatToolInput(
-              latestMessage.tool_info?.name || "unknown tool",
-              latestMessage.tool_info?.args || {},
-            ),
+            toolName,
+            input: { tool: "generic" as const, name: toolName, args: latestMessage.tool_info?.args || {} },
             timestamp,
           })
         }

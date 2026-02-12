@@ -8,6 +8,7 @@
     "@ai-sdk/provider": "2.0.1",
     "isomorphic-ws": "^5.0.0",
     "neverthrow": "^8.2.0",
+    "proxy-agent": "^6.5.0",
     "uuid": "^11.0.5",
     "zod": "^3.25.76"
   }

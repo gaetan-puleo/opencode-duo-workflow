@@ -4,147 +4,169 @@ import type {
   DuoWorkflowEvent,
   ToolApproval,
   ToolApprovalPolicy,
+  ToolResponseType,
   WorkflowAction,
   WorkflowType,
 } from "./types"
-import { createWorkflow, getWorkflowToken, WorkflowCreateError } from "./workflow_service"
+import { createWorkflow, getWorkflowToken, WorkflowCreateError, type GenerateTokenResponse } from "./workflow_service"
 import { WebSocketWorkflowClient } from "./workflow_client"
 import { WorkflowEventMapper, type AgentEvent } from "./workflow_event_mapper"
-import { ToolInputFormatter } from "./tool_input_formatter"
 import { createLogger } from "./logger"
 import { getSystemContextItems } from "./system_context"
+import { detectProjectPath, fetchProjectDetailsWithFallback } from "./gitlab_utils"
+import { AsyncQueue } from "./async_queue"
+import { mapWorkflowActionToToolRequest } from "./action_handler"
 import fs from "fs/promises"
 import path from "path"
+import os from "os"
+import { ProxyAgent } from "proxy-agent"
 
-type RuntimeEvent = AgentEvent | { type: "TOOL_REQUEST"; requestId: string; toolName: string; args: Record<string, unknown> }
+type RuntimeEvent = AgentEvent | { type: "TOOL_REQUEST"; requestId: string; toolName: string; args: Record<string, unknown>; responseType?: ToolResponseType }
 
-type PendingTool = { requestId: string; toolName: string }
-
-class AsyncQueue<T> {
-  #items: T[] = []
-  #resolvers: Array<(value: IteratorResult<T>) => void> = []
-  #closed = false
-
-  push(item: T): void {
-    if (this.#closed) return
-    const resolver = this.#resolvers.shift()
-    if (resolver) {
-      resolver({ value: item, done: false })
-      return
-    }
-    this.#items.push(item)
-  }
-
-  close(): void {
-    this.#closed = true
-    while (this.#resolvers.length > 0) {
-      const resolver = this.#resolvers.shift()
-      if (resolver) resolver({ value: undefined as unknown as T, done: true })
-    }
-  }
-
-  async *iterate(): AsyncGenerator<T> {
-    while (true) {
-      if (this.#items.length > 0) {
-        yield this.#items.shift() as T
-        continue
-      }
-
-      if (this.#closed) return
-
-      const next = await new Promise<IteratorResult<T>>((resolve) => {
-        this.#resolvers.push(resolve)
-      })
-      if (next.done) return
-      yield next.value
-    }
-  }
-}
+type PendingTool = { requestId: string; toolName: string; responseType?: ToolResponseType }
 
 export class GitLabAgenticRuntime {
   #options: GitLabDuoAgenticProviderOptions
-  #workflowId?: string
-  #client?: WebSocketWorkflowClient
+  #selectedModelIdentifier?: string
+  #logger = createLogger()
+  #workflowIds = new Map<string, string>()
+  #wsClient?: WebSocketWorkflowClient
+  #workflowToken?: GenerateTokenResponse
   #queue?: AsyncQueue<RuntimeEvent>
-  #mapper = new WorkflowEventMapper(new ToolInputFormatter(), createLogger())
+  #stream?: { write: (data: unknown) => boolean; on: (event: string, handler: (...args: any[]) => void) => void }
+  #mapper = new WorkflowEventMapper(createLogger())
   #pendingTool?: PendingTool
   #containerParams?: { projectId?: string; namespaceId?: string }
+  #sessionId?: string
+  #startRequestSent = false
+
+  get #currentWorkflowId(): string | undefined {
+    return this.#workflowIds.get(this.#sessionId ?? "__default__")
+  }
+
+  set #currentWorkflowId(value: string | undefined) {
+    const key = this.#sessionId ?? "__default__"
+    if (value) this.#workflowIds.set(key, value)
+    else this.#workflowIds.delete(key)
+  }
 
   constructor(options: GitLabDuoAgenticProviderOptions) {
     this.#options = options
   }
 
+  // ---------------------------------------------------------------------------
+  // Public accessors
+  // ---------------------------------------------------------------------------
+
   get pendingTool(): PendingTool | undefined {
     return this.#pendingTool
+  }
+
+  get hasStarted(): boolean {
+    return this.#startRequestSent
+  }
+
+  setSessionId(sessionId?: string): void {
+    if (sessionId && sessionId !== this.#sessionId) {
+      this.#logger.warn(`session changed: ${this.#sessionId ?? "(none)"} -> ${sessionId}, resetting connection`)
+      this.#resetStreamState()
+    }
+    this.#sessionId = sessionId
+  }
+
+  setSelectedModelIdentifier(ref?: string): void {
+    if (ref === this.#selectedModelIdentifier) return
+    this.#logger.warn(`model changed: ${this.#selectedModelIdentifier ?? "(default)"} -> ${ref ?? "(default)"}`)
+    this.#selectedModelIdentifier = ref
+    this.#resetStreamState()
   }
 
   clearPendingTool(): void {
     this.#pendingTool = undefined
   }
 
-  async ensureConnected(goal: string, workflowType: WorkflowType): Promise<void> {
-    if (this.#client && this.#workflowId && this.#queue) return
-
-    this.#containerParams = await this.#resolveContainerParams()
-    this.#workflowId = await this.#ensureWorkflow(goal, workflowType)
-    const token = await getWorkflowToken(this.#options.instanceUrl, this.#options.apiKey, workflowType)
-
-    this.#client = new WebSocketWorkflowClient(createLogger(), {
-      gitlabInstanceUrl: new URL(this.#options.instanceUrl),
-      token: token.duo_workflow_service.token,
-    })
-
-    const stream = await this.#client.executeWorkflow()
-    this.#queue = new AsyncQueue<RuntimeEvent>()
-
-    stream.on("data", async (action: WorkflowAction) => {
-      if (action.newCheckpoint) {
-        const duoEvent: DuoWorkflowEvent = {
-          checkpoint: action.newCheckpoint.checkpoint,
-          errors: action.newCheckpoint.errors || [],
-          workflowGoal: action.newCheckpoint.goal,
-          workflowStatus: action.newCheckpoint.status,
-        }
-        const events = await this.#mapper.mapWorkflowEvent(duoEvent)
-        for (const event of events) this.#queue?.push(event)
-        return
-      }
-
-      if (action.runMCPTool && action.requestID) {
-        this.#pendingTool = { requestId: action.requestID, toolName: action.runMCPTool.name }
-        this.#queue?.push({
-          type: "TOOL_REQUEST",
-          requestId: action.requestID,
-          toolName: action.runMCPTool.name,
-          args: action.runMCPTool.args,
-        })
-        return
-      }
-    })
-
-    stream.on("error", (err: Error) => {
-      this.#queue?.push({ type: "ERROR", message: err.message, timestamp: Date.now() })
-      this.#queue?.close()
-    })
-
-    stream.on("end", () => {
-      this.#queue?.close()
-    })
+  resetMapperState(): void {
+    this.#mapper.resetStreamState()
   }
+
+  // ---------------------------------------------------------------------------
+  // Connection lifecycle
+  // ---------------------------------------------------------------------------
+
+  async ensureConnected(goal: string, workflowType: WorkflowType): Promise<void> {
+    if (this.#stream && this.#currentWorkflowId && this.#queue) {
+      this.#logger.warn("already connected, reusing")
+      return
+    }
+
+    if (!this.#containerParams) {
+      this.#logger.warn(`detecting project from cwd=${process.cwd()} instance=${this.#options.instanceUrl}`)
+      this.#containerParams = await this.#resolveContainerParams()
+      this.#logger.warn(`resolved project=${this.#containerParams.projectId} namespace=${this.#containerParams.namespaceId}`)
+    }
+
+    if (!this.#currentWorkflowId) {
+      this.#currentWorkflowId = await this.#ensureWorkflow(goal, workflowType)
+      this.#logger.warn(`workflow=${this.#currentWorkflowId} type=${workflowType}`)
+    }
+
+    this.#logger.warn(`fetching workflow token for type=${workflowType}`)
+    const token = await getWorkflowToken(this.#options.instanceUrl, this.#options.apiKey, workflowType)
+    this.#workflowToken = token
+    this.#logger.warn("workflow token acquired")
+
+    const MAX_LOCK_RETRIES = 3
+    const LOCK_RETRY_DELAY_MS = 3000
+
+    for (let attempt = 1; attempt <= MAX_LOCK_RETRIES; attempt++) {
+      this.#queue = new AsyncQueue<RuntimeEvent>()
+      try {
+        this.#logger.warn(`connecting websocket to ${this.#options.instanceUrl} (attempt ${attempt}/${MAX_LOCK_RETRIES})`)
+        await this.#connectWebSocket()
+        this.#logger.warn("websocket connected")
+        return
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err)
+        if ((msg.includes("1013") || msg.includes("lock")) && attempt < MAX_LOCK_RETRIES) {
+          this.#logger.warn(`workflow ${this.#currentWorkflowId} locked, retrying in ${LOCK_RETRY_DELAY_MS}ms (attempt ${attempt}/${MAX_LOCK_RETRIES})`)
+          this.#resetStreamState()
+          await new Promise((resolve) => setTimeout(resolve, LOCK_RETRY_DELAY_MS))
+          const retryToken = await getWorkflowToken(this.#options.instanceUrl, this.#options.apiKey, workflowType)
+          this.#workflowToken = retryToken
+          continue
+        }
+        if (msg.includes("1013") || msg.includes("lock")) {
+          this.#logger.error(`workflow ${this.#currentWorkflowId} still locked after ${MAX_LOCK_RETRIES} attempts`)
+          throw new Error("GitLab Duo workflow is locked (another session may still be active). Please try again in a few seconds.")
+        }
+        this.#logger.error(`websocket connection failed: ${msg}`)
+        throw new Error(`GitLab Duo connection failed: ${msg}`)
+      }
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Messaging
+  // ---------------------------------------------------------------------------
 
   sendStartRequest(
     goal: string,
     workflowType: WorkflowType,
     toolApproval?: ToolApproval,
-    mcpTools: ClientEvent["startRequest"]["mcpTools"] = [],
+    mcpTools: NonNullable<ClientEvent["startRequest"]>["mcpTools"] = [],
     preapprovedTools: string[] = [],
+    extraContext: Array<{ category: string; content?: string | null; id?: string; metadata?: Record<string, unknown> }> = [],
   ): void {
-    if (!this.#client || !this.#workflowId) throw new Error("Workflow client not initialized")
-
-    const additionalContext = this.#options.sendSystemContext === false ? [] : getSystemContextItems()
+    if (!this.#stream || !this.#currentWorkflowId) throw new Error("Workflow client not initialized")
+    this.#logger.warn(`startRequest: tools=${mcpTools.length} preapproved=${preapprovedTools.length} approval=${!!toolApproval}`)
+    const additionalContext =
+      this.#options.sendSystemContext === false
+        ? []
+        : getSystemContextItems(this.#options.systemRules)
+    additionalContext.push(...extraContext)
     const startRequest: ClientEvent = {
       startRequest: {
-        workflowID: this.#workflowId,
+        workflowID: this.#currentWorkflowId!,
         clientVersion: "1.0",
         workflowDefinition: workflowType,
         goal: toolApproval ? "" : goal,
@@ -160,19 +182,43 @@ export class GitLabAgenticRuntime {
         mcpTools,
         preapproved_tools: preapprovedTools,
         approval:
-          toolApproval && toolApproval.userApproved
-            ? { approval: {} }
-            : toolApproval && toolApproval.userApproved === false
-              ? { rejection: { message: toolApproval.message } }
-              : undefined,
+          toolApproval
+            ? {
+                approval: toolApproval.userApproved === true ? {} : undefined,
+                rejection:
+                  toolApproval.userApproved === false
+                    ? { message: toolApproval.message }
+                    : undefined,
+              }
+            : undefined,
       },
     }
 
-    this.#client.write(startRequest)
+    this.#stream.write(startRequest)
+    this.#startRequestSent = true
   }
 
-  sendToolResponse(requestId: string, response: { output: string; error?: string }): void {
-    if (!this.#client) throw new Error("Workflow client not initialized")
+  sendToolResponse(requestId: string, response: { output: string; error?: string }, responseType?: ToolResponseType): void {
+    if (!this.#stream) throw new Error("Workflow client not initialized")
+    this.#logger.warn(`toolResponse: requestId=${requestId} type=${responseType ?? "plain"} error=${!!response.error} outputLen=${response.output?.length ?? 0}`)
+
+    if (responseType === "http") {
+      const parsed = parseHttpToolOutput(response.output)
+      const event: ClientEvent = {
+        actionResponse: {
+          requestID: requestId,
+          httpResponse: {
+            status: parsed.status,
+            headers: parsed.headers,
+            response: parsed.body,
+            error: response.error ?? "",
+          },
+        },
+      }
+      this.#stream.write(event)
+      return
+    }
+
     const event: ClientEvent = {
       actionResponse: {
         requestID: requestId,
@@ -182,7 +228,7 @@ export class GitLabAgenticRuntime {
         },
       },
     }
-    this.#client.write(event)
+    this.#stream.write(event)
   }
 
   getEventStream(): AsyncGenerator<RuntimeEvent> {
@@ -202,8 +248,12 @@ export class GitLabAgenticRuntime {
     return undefined
   }
 
+  // ---------------------------------------------------------------------------
+  // Private: project / workflow resolution
+  // ---------------------------------------------------------------------------
+
   async #resolveContainerParams(): Promise<{ projectId?: string; namespaceId?: string }> {
-    const projectPath = await detectProjectPath(process.cwd())
+    const projectPath = await detectProjectPath(process.cwd(), this.#options.instanceUrl)
     if (!projectPath) {
       throw new Error(
         "Unable to detect GitLab project. Ensure you run OpenCode in a Git repository with a GitLab remote.",
@@ -211,7 +261,7 @@ export class GitLabAgenticRuntime {
     }
 
     try {
-      const details = await fetchProjectDetails(
+      const details = await fetchProjectDetailsWithFallback(
         this.#options.instanceUrl,
         this.#options.apiKey,
         projectPath,
@@ -228,15 +278,27 @@ export class GitLabAgenticRuntime {
   }
 
   async #ensureWorkflow(goal: string, workflowType: WorkflowType): Promise<string> {
+    await this.#loadWorkflowId()
+    if (this.#currentWorkflowId) {
+      this.#logger.warn(`reusing cached workflow=${this.#currentWorkflowId}`)
+      return this.#currentWorkflowId
+    }
+    this.#logger.warn(`creating new workflow type=${workflowType}`)
     try {
-      return await createWorkflow(
+      const workflowId = await createWorkflow(
         this.#options.instanceUrl,
         this.#options.apiKey,
         goal,
         workflowType,
         this.#containerParams,
       )
+      this.#currentWorkflowId = workflowId
+      this.#logger.warn(`created workflow=${workflowId}`)
+      await this.#persistWorkflowId()
+      return workflowId
     } catch (error) {
+      const errMsg = error instanceof Error ? error.message : String(error)
+      this.#logger.error(`workflow creation failed: ${errMsg}`)
       if (
         error instanceof WorkflowCreateError &&
         error.status === 400 &&
@@ -249,105 +311,194 @@ export class GitLabAgenticRuntime {
       throw error
     }
   }
-}
 
-function extractNamespaceIdFromGid(gid?: string): string | undefined {
-  if (!gid) return undefined
-  const match = /gid:\/\/gitlab\/Group\/(\d+)/.exec(gid)
-  return match?.[1]
-}
+  // ---------------------------------------------------------------------------
+  // Private: WebSocket stream binding
+  // ---------------------------------------------------------------------------
 
-async function detectProjectPath(cwd: string): Promise<string | undefined> {
-  let current = cwd
-  while (true) {
-    const configPath = path.join(current, ".git", "config")
+  #bindStream(
+    stream: AsyncIterable<WorkflowAction>,
+    queue: AsyncQueue<RuntimeEvent>,
+  ): void {
+    const handleAction = async (action: WorkflowAction) => {
+      // --- Checkpoint updates (non-tool actions) ---
+      if (action.newCheckpoint) {
+        const duoEvent: DuoWorkflowEvent = {
+          checkpoint: action.newCheckpoint.checkpoint,
+          errors: action.newCheckpoint.errors || [],
+          workflowGoal: action.newCheckpoint.goal,
+          workflowStatus: action.newCheckpoint.status,
+        }
+        const events = await this.#mapper.mapWorkflowEvent(duoEvent)
+        const interesting = events.filter((e) => e.type !== "TEXT_CHUNK")
+        if (interesting.length > 0) {
+          this.#logger.warn(`ckpt ${action.newCheckpoint.status} → ${interesting.map((e) => e.type).join(", ")}`)
+        }
+        for (const event of events) queue.push(event)
+        return
+      }
+
+      // --- Tool requests (delegated to action_handler) ---
+      const toolRequest = mapWorkflowActionToToolRequest(action)
+      if (toolRequest) {
+        this.#logger.warn(`ws ${toolRequest.toolName}: requestID=${toolRequest.requestId} args=${JSON.stringify(toolRequest.args).slice(0, 200)}`)
+        this.#pendingTool = {
+          requestId: toolRequest.requestId,
+          toolName: toolRequest.toolName,
+          responseType: toolRequest.responseType,
+        }
+        queue.push({
+          type: "TOOL_REQUEST",
+          ...toolRequest,
+        })
+        return
+      }
+
+      const actionKey = Object.keys(action).find((k) => k !== "requestID" && (action as Record<string, unknown>)[k])
+      this.#logger.warn(`ws action (unhandled): ${actionKey ?? "unknown"}`)
+    }
+
+    if ("on" in (stream as any)) {
+      ;(stream as any).on("data", (action: WorkflowAction) => {
+        handleAction(action)
+      })
+      ;(stream as any).on("error", (err: Error) => {
+        this.#logger.warn(`stream error: ${err.message}`)
+        queue.push({ type: "ERROR", message: err.message, timestamp: Date.now() })
+        queue.close()
+        this.#resetStreamState()
+      })
+      ;(stream as any).on("end", () => {
+        this.#logger.warn("stream ended")
+        queue.close()
+        this.#resetStreamState()
+      })
+    }
+  }
+
+  async #connectWebSocket(): Promise<void> {
+    if (!this.#queue) return
+    if (!this.#workflowToken) throw new Error("Workflow token unavailable")
+
+    this.#wsClient = new WebSocketWorkflowClient(createLogger(), {
+      gitlabInstanceUrl: new URL(this.#options.instanceUrl),
+      token: this.#options.apiKey,
+      headers: buildWorkflowHeaders(
+        this.#workflowToken.duo_workflow_service.headers,
+        this.#containerParams,
+      ),
+      selectedModelIdentifier: this.#selectedModelIdentifier,
+      ...resolveWebSocketAgentOptions(),
+    })
+
+    const stream = await this.#wsClient.executeWorkflow()
+    this.#stream = stream
+    this.#bindStream(stream as unknown as AsyncIterable<WorkflowAction>, this.#queue)
+  }
+
+  #resetStreamState(): void {
+    this.#stream = undefined
+    this.#queue = undefined
+    this.#pendingTool = undefined
+    this.#startRequestSent = false
+    this.#wsClient?.dispose()
+    this.#wsClient = undefined
+  }
+
+  // ---------------------------------------------------------------------------
+  // Private: workflow ID persistence
+  // ---------------------------------------------------------------------------
+
+  async #loadWorkflowId(): Promise<void> {
+    if (this.#currentWorkflowId || !this.#sessionId) return
+    const filePath = workflowMapFile()
     try {
-      const config = await fs.readFile(configPath, "utf8")
-      const url = extractGitRemoteUrl(config) || ""
-      return parseProjectPathFromRemote(url)
+      const raw = await fs.readFile(filePath, "utf8")
+      const data = JSON.parse(raw) as Record<string, { workflowId?: string; updatedAt?: number }>
+      const entry = data[this.#sessionId]
+      if (entry?.workflowId) {
+        this.#currentWorkflowId = entry.workflowId
+        this.#logger.warn(`loaded cached workflowId=${entry.workflowId} for session=${this.#sessionId}`)
+      }
     } catch {
-      const parent = path.dirname(current)
-      if (parent === current) return undefined
-      current = parent
-    }
-  }
-}
-
-function extractGitRemoteUrl(config: string): string | undefined {
-  const lines = config.split("\n")
-  let inOrigin = false
-  let originUrl: string | undefined
-  let firstUrl: string | undefined
-
-  for (const line of lines) {
-    const trimmed = line.trim()
-    const sectionMatch = /^\[remote\s+"([^"]+)"\]$/.exec(trimmed)
-    if (sectionMatch) {
-      inOrigin = sectionMatch[1] === "origin"
-      continue
-    }
-    const urlMatch = /^url\s*=\s*(.+)$/.exec(trimmed)
-    if (urlMatch) {
-      const value = urlMatch[1].trim()
-      if (!firstUrl) firstUrl = value
-      if (inOrigin) originUrl = value
+      this.#logger.warn(`no cached workflow for session=${this.#sessionId}`)
     }
   }
 
-  return originUrl ?? firstUrl
-}
-
-function parseProjectPathFromRemote(remoteUrl: string): string | undefined {
-  if (!remoteUrl) return undefined
-  if (remoteUrl.startsWith("http")) {
+  async #persistWorkflowId(): Promise<void> {
+    if (!this.#sessionId || !this.#currentWorkflowId) return
+    const dir = workflowMapDir()
+    await fs.mkdir(dir, { recursive: true })
+    const filePath = workflowMapFile()
+    let data: Record<string, { workflowId: string; updatedAt: number }> = {}
     try {
-      const url = new URL(remoteUrl)
-      return stripGitSuffix(url.pathname.replace(/^\//, ""))
+      const raw = await fs.readFile(filePath, "utf8")
+      data = JSON.parse(raw) as typeof data
     } catch {
-      return undefined
+      // file doesn't exist yet, start fresh
+    }
+    data[this.#sessionId] = { workflowId: this.#currentWorkflowId, updatedAt: Date.now() }
+    await fs.writeFile(filePath, JSON.stringify(data, null, 2), "utf8")
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Module-level helpers
+// ---------------------------------------------------------------------------
+
+function buildWorkflowHeaders(
+  headers: Record<string, string>,
+  containerParams?: { projectId?: string; namespaceId?: string },
+): Record<string, string> {
+  const result = normalizeHeaders(headers)
+  if (containerParams?.projectId) {
+    result["x-gitlab-project-id"] = containerParams.projectId
+  }
+  if (containerParams?.namespaceId) {
+    result["x-gitlab-namespace-id"] = containerParams.namespaceId
+  }
+  const featureSetting = process.env.GITLAB_AGENT_PLATFORM_FEATURE_SETTING_NAME
+  if (featureSetting) {
+    result["x-gitlab-agent-platform-feature-setting-name"] = featureSetting
+  }
+  return result
+}
+
+function workflowMapDir(): string {
+  return path.join(os.homedir(), ".local", "share", "opencode", "duo-workflow")
+}
+
+function workflowMapFile(): string {
+  return path.join(workflowMapDir(), "workflow-map.json")
+}
+
+function normalizeHeaders(headers: Record<string, string>): Record<string, string> {
+  const normalized: Record<string, string> = {}
+  for (const [key, value] of Object.entries(headers || {})) {
+    normalized[key.toLowerCase()] = value
+  }
+  return normalized
+}
+
+function resolveWebSocketAgentOptions(): { agent?: object; agentType?: "proxy" } {
+  if (process.env.HTTPS_PROXY || process.env.HTTP_PROXY) {
+    return { agent: new ProxyAgent(), agentType: "proxy" }
+  }
+  return {}
+}
+
+function parseHttpToolOutput(output: string): { status: number; headers: Record<string, string>; body: string } {
+  const lines = output.trimEnd().split("\n")
+  const lastLine = lines[lines.length - 1]?.trim() ?? ""
+  const statusCode = parseInt(lastLine, 10)
+
+  if (!Number.isNaN(statusCode) && statusCode >= 100 && statusCode < 600) {
+    return {
+      status: statusCode,
+      headers: {},
+      body: lines.slice(0, -1).join("\n"),
     }
   }
 
-  if (remoteUrl.startsWith("git@")) {
-    const match = /^git@[^:]+:(.+)$/.exec(remoteUrl)
-    if (!match) return undefined
-    return stripGitSuffix(match[1])
-  }
-
-  if (remoteUrl.startsWith("ssh://")) {
-    try {
-      const url = new URL(remoteUrl)
-      return stripGitSuffix(url.pathname.replace(/^\//, ""))
-    } catch {
-      return undefined
-    }
-  }
-
-  return undefined
-}
-
-function stripGitSuffix(pathname: string): string {
-  return pathname.endsWith(".git") ? pathname.slice(0, -4) : pathname
-}
-
-async function fetchProjectDetails(
-  instanceUrl: string,
-  apiKey: string,
-  projectPath: string,
-): Promise<{ projectId?: string; namespaceId?: string }> {
-  const url = new URL(`/api/v4/projects/${encodeURIComponent(projectPath)}`, instanceUrl)
-  const response = await fetch(url.toString(), {
-    headers: { authorization: `Bearer ${apiKey}` },
-  })
-  if (!response.ok) {
-    throw new Error(`Failed to fetch project details: ${response.status}`)
-  }
-  const data = (await response.json()) as {
-    id?: number
-    namespace?: { id?: number }
-  }
-  return {
-    projectId: data.id ? String(data.id) : undefined,
-    namespaceId: data.namespace?.id ? String(data.namespace.id) : undefined,
-  }
+  return { status: 0, headers: {}, body: output }
 }

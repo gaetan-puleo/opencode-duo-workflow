@@ -49,24 +49,32 @@ export class WebSocketWorkflowStream extends EventEmitter {
     })
 
     this.#socket.on("open", () => {
-      this.#logger.debug("WebSocket connection opened")
+      this.#logger.warn("WebSocket connection opened")
       this.emit("open")
     })
 
     this.#socket.on("error", (event: WebSocket.ErrorEvent | Error) => {
-      this.#logger.error("WebSocket error:", event)
-      this.emit("error", event instanceof Error ? event : new Error(String(event)))
+      if (event instanceof Error) {
+        this.#logger.error("WebSocket error:", event)
+        this.emit("error", event)
+        return
+      }
+
+      const serialized = safeStringifyErrorEvent(event)
+      this.#logger.error(`WebSocket error event: ${serialized}`)
+      this.emit("error", new Error(serialized))
     })
 
     this.#socket.on("close", (code: number, reason: Buffer) => {
       clearInterval(this.#keepalivePingIntervalId)
       const reasonString = reason?.toString("utf8")
-      this.#logger.debug(`WebSocket connection closed: ${JSON.stringify({ code, reason: reasonString })}`)
       if (code === 1000) {
+        this.#logger.warn(`WebSocket closed normally`)
         this.emit("end")
         return
       }
 
+      this.#logger.error(`WebSocket closed: ${code} ${reasonString || ""}`)
       this.emit("error", new Error(`WebSocket closed abnormally: ${code} ${reasonString || ""}`))
     })
 
@@ -74,9 +82,9 @@ export class WebSocketWorkflowStream extends EventEmitter {
       try {
         const pingTime = parseInt(data.toString(), 10)
         const rtt = `${Date.now() - pingTime}ms`
-        this.#logger.debug(`WebSocket keepalive pong: ${rtt}`)
+        this.#logger.warn(`WebSocket keepalive pong: ${rtt}`)
       } catch (err) {
-        this.#logger.debug("Failed to parse keepalive pong", err)
+        this.#logger.warn("Failed to parse keepalive pong", err)
       }
     })
 
@@ -87,7 +95,7 @@ export class WebSocketWorkflowStream extends EventEmitter {
     this.#keepalivePingIntervalId = setInterval(() => {
       if (this.#socket.readyState !== WebSocket.OPEN) return
       const timestamp = Date.now().toString()
-      this.#socket.ping(Buffer.from(timestamp), undefined, (err) => {
+      this.#socket.ping(Buffer.from(timestamp), undefined, (err: Error | undefined) => {
         if (err) {
           this.#logger.error("Keepalive ping failed:", err)
         }
@@ -107,4 +115,17 @@ export class WebSocketWorkflowStream extends EventEmitter {
   end(): void {
     this.#socket.close(1000)
   }
+}
+
+function safeStringifyErrorEvent(event: WebSocket.ErrorEvent): string {
+  const payload = {
+    type: event.type,
+    message: event.message,
+    error: event.error ? String(event.error) : undefined,
+    target: {
+      readyState: (event.target as WebSocket | undefined)?.readyState,
+      url: (event.target as WebSocket | undefined)?.url,
+    },
+  }
+  return JSON.stringify(payload)
 }
