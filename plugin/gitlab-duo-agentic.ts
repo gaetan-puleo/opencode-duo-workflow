@@ -16,6 +16,13 @@ export const GitLabDuoAgenticPlugin: Plugin = async () => {
     "chat.params": async (input, output) => {
       output.options ??= {}
       output.options.opencodeSessionId = input.sessionID
+      // Pass agent info to the provider — input.agent is Agent.Info at runtime
+      // (the plugin type declares it as string, but the full object is passed)
+      const agent = input.agent as Record<string, unknown>
+      if (typeof agent === "object" && agent !== null) {
+        output.options.agentName = agent.name
+        output.options.agentPrompt = agent.prompt
+      }
       return output
     },
     tool: createReadTools(),

@@ -53,6 +53,27 @@ function stripSystemReminder(text: string): string {
 }
 
 // ---------------------------------------------------------------------------
+// System prompt extraction
+// ---------------------------------------------------------------------------
+
+/**
+ * Collect all system messages from the prompt and join their content.
+ * The AI SDK places system messages as `{ role: "system", content: string }`
+ * at the beginning of the prompt array.
+ */
+export function extractSystemPrompt(prompt: LanguageModelV2CallOptions["prompt"]): string | null {
+  if (!Array.isArray(prompt)) return null
+  const parts: string[] = []
+  for (const message of prompt) {
+    const msg = message as { role?: string; content?: unknown }
+    if (msg.role === "system" && typeof msg.content === "string" && msg.content.trim()) {
+      parts.push(msg.content)
+    }
+  }
+  return parts.length > 0 ? parts.join("\n") : null
+}
+
+// ---------------------------------------------------------------------------
 // Tool result extraction
 // ---------------------------------------------------------------------------
 
