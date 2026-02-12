@@ -81,6 +81,7 @@ export class GitLabDuoAgenticLanguageModel implements LanguageModelV2 {
       }
       this.#sentToolCallIds.clear()
       this.#pendingToolRequests.clear()
+      this.#lastSentPrompt = null
       for (const r of toolResults) {
         this.#sentToolCallIds.add(r.toolCallId)
       }
@@ -123,57 +124,52 @@ export class GitLabDuoAgenticLanguageModel implements LanguageModelV2 {
       sentToolResults = true
     }
 
-    // --- Send startRequest for new user messages ---
-    if (!sentToolResults && isNewUserMessage) {
+    // --- First message: send startRequest with full system prompt ---
+    if (!sentToolResults && !this.#runtime.hasStarted && promptText) {
       const extraContext: AIContextItem[] = []
       if (toolContext) extraContext.push(toolContext)
-
-      if (!this.#runtime.hasStarted) {
-        // First message: send the full system prompt (agent prompt + env + instructions)
-        const systemPrompt = extractSystemPrompt(options.prompt)
-        if (systemPrompt) {
-          extraContext.push({
-            category: "agent_context",
-            content: systemPrompt,
-            id: "opencode_system_prompt",
-            metadata: {
-              title: "OpenCode System Prompt",
-              enabled: true,
-              subType: "system_prompt",
-              icon: "file-text",
-              secondaryText: "Full system prompt",
-              subTypeLabel: "System Prompt",
-            },
-          })
-        }
-        this.#logger.warn(`sending initial startRequest: prompt=${promptText!.slice(0, 80)} systemPromptLen=${systemPrompt?.length ?? 0}`)
-      } else {
-        // Follow-up message: send only the agent prompt (plan/build/explore/custom)
-        if (agentPrompt) {
-          extraContext.push({
-            category: "agent_context",
-            content: agentPrompt,
-            id: "opencode_agent_prompt",
-            metadata: {
-              title: "OpenCode Agent Prompt",
-              enabled: true,
-              subType: "agent_prompt",
-              icon: "file-text",
-              secondaryText: "Agent prompt",
-              subTypeLabel: "Agent Prompt",
-            },
-          })
-        }
-        this.#logger.warn(`sending follow-up startRequest: prompt=${promptText!.slice(0, 80)} hasAgentPrompt=${!!agentPrompt}`)
+      const systemPrompt = extractSystemPrompt(options.prompt)
+      if (systemPrompt) {
+        extraContext.push({
+          category: "agent_context",
+          content: systemPrompt,
+          id: "opencode_system_prompt",
+          metadata: {
+            title: "OpenCode System Prompt",
+            enabled: true,
+            subType: "system_prompt",
+            icon: "file-text",
+            secondaryText: "Full system prompt",
+            subTypeLabel: "System Prompt",
+          },
+        })
       }
+      this.#logger.warn(`sending initial startRequest: prompt=${promptText.slice(0, 80)} systemPromptLen=${systemPrompt?.length ?? 0}`)
+      this.#runtime.sendStartRequest(promptText, workflowType, mcpTools, [], extraContext)
+      this.#lastSentPrompt = promptText
+    }
 
-      this.#runtime.sendStartRequest(
-        promptText!,
-        workflowType,
-        mcpTools,
-        [],
-        extraContext,
-      )
+    // --- Follow-up message: send startRequest with agent prompt only ---
+    if (!sentToolResults && this.#runtime.hasStarted && isNewUserMessage) {
+      const extraContext: AIContextItem[] = []
+      if (toolContext) extraContext.push(toolContext)
+      if (agentPrompt) {
+        extraContext.push({
+          category: "agent_context",
+          content: agentPrompt,
+          id: "opencode_agent_prompt",
+          metadata: {
+            title: "OpenCode Agent Prompt",
+            enabled: true,
+            subType: "agent_prompt",
+            icon: "file-text",
+            secondaryText: "Agent prompt",
+            subTypeLabel: "Agent Prompt",
+          },
+        })
+      }
+      this.#logger.warn(`sending follow-up startRequest: prompt=${promptText!.slice(0, 80)} hasAgentPrompt=${!!agentPrompt}`)
+      this.#runtime.sendStartRequest(promptText!, workflowType, mcpTools, [], extraContext)
       this.#lastSentPrompt = promptText
     }
 
