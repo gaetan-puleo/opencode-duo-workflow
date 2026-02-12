@@ -6,18 +6,12 @@ import type {
   LanguageModelV2StreamPart,
   LanguageModelV2Usage,
 } from "@ai-sdk/provider"
-import type { GitLabDuoAgenticProviderOptions, AIContextItem, ToolApprovalPolicy, WorkflowType } from "./types"
+import type { GitLabDuoAgenticProviderOptions, AIContextItem, WorkflowType } from "./types"
 import { GitLabAgenticRuntime } from "./runtime"
 import { asyncIteratorToReadableStream } from "./stream_adapter"
 import { createLogger } from "./logger"
 import { extractLastUserText, extractToolResults } from "./prompt_utils"
-import {
-  buildMcpTools,
-  buildToolContext,
-  extractApprovalArgs,
-  mapDuoToolRequest,
-  toolKey,
-} from "./tool_mapping"
+import { buildMcpTools, buildToolContext, mapDuoToolRequest } from "./tool_mapping"
 
 type StreamState = { textStarted: boolean }
 
@@ -30,10 +24,7 @@ export class GitLabDuoAgenticLanguageModel implements LanguageModelV2 {
   #options: GitLabDuoAgenticProviderOptions
   #logger = createLogger()
   #runtime: GitLabAgenticRuntime
-  #pendingApprovals = new Map<string, { toolName: string; args: Record<string, unknown>; key: string }>()
-  #approvalCache = new Map<string, { output: string; error?: string }>()
-  #pendingToolRequests = new Map<string, { toolName: string; key: string; responseType?: string }>()
-  #handledDirectTools = new Set<string>()
+  #pendingToolRequests = new Map<string, { toolName: string; responseType?: string }>()
   #sentToolCallIds = new Set<string>()
   #mcpTools: Array<{ name: string; description?: string; schema?: unknown; isApproved?: boolean }> = []
   #toolContext: AIContextItem | null = null
@@ -76,8 +67,6 @@ export class GitLabDuoAgenticLanguageModel implements LanguageModelV2 {
     const promptText = extractLastUserText(options.prompt)
     const toolResults = extractToolResults(options.prompt)
     this.#logger.warn(`doStream: prompt=${promptText?.slice(0, 80) ?? "(none)"} toolResults=${toolResults.length}`)
-    const policy = (this.#options.toolApproval ?? "ask") as ToolApprovalPolicy
-    const approval = GitLabAgenticRuntime.buildToolApproval(promptText ?? "", this.#runtime.pendingTool, policy)
     const providerOpts = (options.providerOptions as Record<string, Record<string, unknown>> | undefined)?.["gitlab-duo-agentic-unofficial"]
     const sessionId = providerOpts?.opencodeSessionId as string | undefined
     this.#runtime.setSessionId(sessionId)
@@ -90,9 +79,6 @@ export class GitLabDuoAgenticLanguageModel implements LanguageModelV2 {
         this.#logger.warn(`new turn: clearing per-turn state (sentIds=${this.#sentToolCallIds.size})`)
       }
       this.#sentToolCallIds.clear()
-      this.#approvalCache.clear()
-      this.#handledDirectTools.clear()
-      this.#pendingApprovals.clear()
       this.#pendingToolRequests.clear()
       for (const r of toolResults) {
         this.#sentToolCallIds.add(r.toolCallId)
@@ -113,43 +99,10 @@ export class GitLabDuoAgenticLanguageModel implements LanguageModelV2 {
 
     let sentToolResults = false
 
-    // --- Handle approval results ---
-    const approvalResults = freshToolResults.filter((result) => result.toolCallId.startsWith("duo-approval:"))
-    if (approvalResults.length > 0) {
-      this.#logger.warn(`processing ${approvalResults.length} approval results`)
-      for (const result of approvalResults) {
-        const pending = this.#pendingApprovals.get(result.toolCallId)
-        if (!pending) {
-          this.#logger.warn(`approvalResult: no pending approval for ${result.toolCallId}`)
-          continue
-        }
-        this.#logger.warn(`approvalResult: id=${result.toolCallId} tool=${pending.toolName} approved=${!result.error}`)
-        this.#pendingApprovals.delete(result.toolCallId)
-        this.#sentToolCallIds.add(result.toolCallId)
-        if (!result.error) {
-          this.#approvalCache.set(pending.key, { output: result.output, error: result.error })
-        }
-        this.#runtime.sendStartRequest(
-          "",
-          workflowType,
-          result.error
-            ? { userApproved: false as const, message: result.error }
-            : { userApproved: true as const, toolName: pending.toolName, type: "approve_once" as const },
-          this.#mcpTools,
-          [],
-          this.#toolContext ? [this.#toolContext] : [],
-        )
-        sentToolResults = true
-      }
-    }
-
-    // --- Handle tool results for the workflow ---
-    const toolResultsForWorkflow = freshToolResults.filter(
-      (result) => !result.toolCallId.startsWith("duo-approval:"),
-    )
-    if (toolResultsForWorkflow.length > 0) {
-      this.#logger.warn(`sending ${toolResultsForWorkflow.length} tool results to workflow`)
-      for (const result of toolResultsForWorkflow) {
+    // --- Handle tool results (send back to workflow service) ---
+    if (freshToolResults.length > 0) {
+      this.#logger.warn(`sending ${freshToolResults.length} tool results to workflow`)
+      for (const result of freshToolResults) {
         const pending = this.#pendingToolRequests.get(result.toolCallId)
         this.#logger.warn(`toolResult: id=${result.toolCallId} tool=${result.toolName} error=${!!result.error} pending=${!!pending} outputLen=${result.output?.length ?? 0}`)
         this.#runtime.sendToolResponse(
@@ -160,9 +113,6 @@ export class GitLabDuoAgenticLanguageModel implements LanguageModelV2 {
         this.#sentToolCallIds.add(result.toolCallId)
         if (pending) {
           this.#pendingToolRequests.delete(result.toolCallId)
-          this.#approvalCache.set(pending.key, { output: result.output, error: result.error })
-          this.#handledDirectTools.add(pending.toolName)
-          this.#logger.warn(`approvalCache: set key=${pending.key.slice(0, 120)} handledDirectTools+=${pending.toolName}`)
         }
       }
       this.#runtime.clearPendingTool()
@@ -170,12 +120,11 @@ export class GitLabDuoAgenticLanguageModel implements LanguageModelV2 {
     }
 
     // --- Initial start request ---
-    if (!sentToolResults && !this.#runtime.hasStarted && (promptText || approval)) {
-      this.#logger.warn(`sending initial startRequest: hasPrompt=${!!promptText} hasApproval=${!!approval}`)
+    if (!sentToolResults && !this.#runtime.hasStarted && promptText) {
+      this.#logger.warn(`sending initial startRequest: hasPrompt=${!!promptText}`)
       this.#runtime.sendStartRequest(
         promptText || "",
         workflowType,
-        approval,
         mcpTools,
         [],
         toolContext ? [toolContext] : [],
@@ -191,7 +140,7 @@ export class GitLabDuoAgenticLanguageModel implements LanguageModelV2 {
   }
 
   // ---------------------------------------------------------------------------
-  // Event → stream mapping
+  // Event → stream mapping (2 paths: TEXT_CHUNK + TOOL_REQUEST)
   // ---------------------------------------------------------------------------
 
   async *#mapEventsToStream(
@@ -214,38 +163,6 @@ export class GitLabDuoAgenticLanguageModel implements LanguageModelV2 {
         continue
       }
 
-      if (event.type === "TOOL_AWAITING_APPROVAL") {
-        const toolCallId = `duo-approval:${event.toolId}`
-        if (this.#pendingApprovals.has(toolCallId)) {
-          this.#logger.warn(`toolApproval: ${event.toolName} id=${toolCallId} skipped (already pending)`)
-          continue
-        }
-        const approvalArgs = extractApprovalArgs(event.input)
-        const key = toolKey(event.toolName, approvalArgs)
-        this.#logger.warn(`toolApproval: ${event.toolName} id=${toolCallId} args=${JSON.stringify(approvalArgs).slice(0, 200)} key=${key.slice(0, 120)}`)
-
-        if (this.#handledDirectTools.has(event.toolName)) {
-          this.#handledDirectTools.delete(event.toolName)
-          this.#logger.warn(`toolApproval: ${event.toolName} skipped (already handled via direct action)`)
-          continue
-        }
-
-        if (this.#approvalCache.has(key)) {
-          this.#logger.warn(`toolApproval: ${event.toolName} skipped (approvalCache hit)`)
-          continue
-        }
-
-        const mapped = mapDuoToolRequest(event.toolName, approvalArgs)
-        this.#logger.warn(`toolApproval: ${event.toolName} -> ${mapped.toolName} mapped args=${JSON.stringify(mapped.args).slice(0, 200)}`)
-        this.#pendingApprovals.set(toolCallId, {
-          toolName: event.toolName,
-          args: approvalArgs,
-          key,
-        })
-        yield* this.#emitToolCall(toolCallId, mapped.toolName, mapped.args, usage)
-        return
-      }
-
       if (event.type === "TOOL_COMPLETE") {
         this.#logger.warn(`toolComplete: id=${event.toolId} (ignored, handled locally by OpenCode)`)
         continue
@@ -254,18 +171,9 @@ export class GitLabDuoAgenticLanguageModel implements LanguageModelV2 {
       if (event.type === "TOOL_REQUEST") {
         const args = event.args as Record<string, unknown>
         const mapped = mapDuoToolRequest(event.toolName, args)
-        const key = toolKey(event.toolName, args)
-        this.#logger.warn(`toolRequest: ${event.toolName} -> ${mapped.toolName} args=${JSON.stringify(args).slice(0, 200)} key=${key.slice(0, 120)}`)
+        this.#logger.warn(`toolRequest: ${event.toolName} -> ${mapped.toolName} args=${JSON.stringify(args).slice(0, 200)}`)
         const responseType = (event as { responseType?: string }).responseType as "plain" | "http" | undefined
-        const cached = this.#approvalCache.get(key)
-        if (cached) {
-          this.#logger.warn(`toolRequest: ${event.toolName} cache hit key=${key.slice(0, 120)}, auto-responding`)
-          this.#approvalCache.delete(key)
-          this.#runtime.sendToolResponse(event.requestId, cached, responseType)
-          this.#runtime.clearPendingTool()
-          continue
-        }
-        this.#pendingToolRequests.set(event.requestId, { toolName: event.toolName, key, responseType })
+        this.#pendingToolRequests.set(event.requestId, { toolName: event.toolName, responseType })
         yield* this.#emitToolCall(event.requestId, mapped.toolName, mapped.args, usage)
         return
       }

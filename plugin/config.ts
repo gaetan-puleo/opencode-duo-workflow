@@ -24,8 +24,6 @@ export async function configHook(input: Record<string, any>): Promise<void> {
   const systemRulesPath =
     typeof existingOptions.systemRulesPath === "string" ? existingOptions.systemRulesPath : ""
   const mergedSystemRules = await mergeSystemRules(systemRules, systemRulesPath)
-  const toolApproval =
-    typeof existingOptions.toolApproval === "string" ? existingOptions.toolApproval : "ask"
   const sendSystemContext =
     typeof existingOptions.sendSystemContext === "boolean" ? existingOptions.sendSystemContext : true
   const enableMcp = typeof existingOptions.enableMcp === "boolean" ? existingOptions.enableMcp : true
@@ -42,7 +40,6 @@ export async function configHook(input: Record<string, any>): Promise<void> {
     options: {
       instanceUrl,
       apiKey,
-      toolApproval,
       sendSystemContext,
       enableMcp,
       systemRules: mergedSystemRules || undefined,

@@ -4,7 +4,7 @@
  */
 
 import type { LanguageModelV2CallOptions } from "@ai-sdk/provider"
-import type { AIContextItem, ToolInputDisplay } from "./types"
+import type { AIContextItem } from "./types"
 import { asString, asStringArray } from "./prompt_utils"
 
 // ---------------------------------------------------------------------------
@@ -13,23 +13,6 @@ import { asString, asStringArray } from "./prompt_utils"
 
 function shellQuote(value: string): string {
   return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`
-}
-
-// ---------------------------------------------------------------------------
-// Tool key / approval helpers
-// ---------------------------------------------------------------------------
-
-export function toolKey(toolName: string, args: Record<string, unknown>): string {
-  if (toolName !== "read_file") return JSON.stringify({ toolName, args })
-  const filePath =
-    asString(args.file_path) ?? asString(args.filepath) ?? asString(args.filePath) ?? asString(args.path) ?? ""
-  const offset = typeof args.offset === "number" ? args.offset : undefined
-  const limit = typeof args.limit === "number" ? args.limit : undefined
-  return JSON.stringify({ toolName, file_path: filePath, offset, limit })
-}
-
-export function extractApprovalArgs(input: ToolInputDisplay): Record<string, unknown> {
-  return input.args
 }
 
 // ---------------------------------------------------------------------------

@@ -2,8 +2,6 @@ import type {
   GitLabDuoAgenticProviderOptions,
   ClientEvent,
   DuoWorkflowEvent,
-  ToolApproval,
-  ToolApprovalPolicy,
   ToolResponseType,
   WorkflowAction,
   WorkflowType,
@@ -57,10 +55,6 @@ export class GitLabAgenticRuntime {
   // ---------------------------------------------------------------------------
   // Public accessors
   // ---------------------------------------------------------------------------
-
-  get pendingTool(): PendingTool | undefined {
-    return this.#pendingTool
-  }
 
   get hasStarted(): boolean {
     return this.#startRequestSent
@@ -152,13 +146,12 @@ export class GitLabAgenticRuntime {
   sendStartRequest(
     goal: string,
     workflowType: WorkflowType,
-    toolApproval?: ToolApproval,
     mcpTools: NonNullable<ClientEvent["startRequest"]>["mcpTools"] = [],
     preapprovedTools: string[] = [],
     extraContext: Array<{ category: string; content?: string | null; id?: string; metadata?: Record<string, unknown> }> = [],
   ): void {
     if (!this.#stream || !this.#currentWorkflowId) throw new Error("Workflow client not initialized")
-    this.#logger.warn(`startRequest: tools=${mcpTools.length} preapproved=${preapprovedTools.length} approval=${!!toolApproval}`)
+    this.#logger.warn(`startRequest: tools=${mcpTools.length} preapproved=${preapprovedTools.length}`)
     const additionalContext =
       this.#options.sendSystemContext === false
         ? []
@@ -169,7 +162,7 @@ export class GitLabAgenticRuntime {
         workflowID: this.#currentWorkflowId!,
         clientVersion: "1.0",
         workflowDefinition: workflowType,
-        goal: toolApproval ? "" : goal,
+        goal,
         workflowMetadata: JSON.stringify({
           project_id: this.#containerParams?.projectId,
           namespace_id: this.#containerParams?.namespaceId,
@@ -181,16 +174,6 @@ export class GitLabAgenticRuntime {
         clientCapabilities: ["shell_command"],
         mcpTools,
         preapproved_tools: preapprovedTools,
-        approval:
-          toolApproval
-            ? {
-                approval: toolApproval.userApproved === true ? {} : undefined,
-                rejection:
-                  toolApproval.userApproved === false
-                    ? { message: toolApproval.message }
-                    : undefined,
-              }
-            : undefined,
       },
     }
 
@@ -236,17 +219,7 @@ export class GitLabAgenticRuntime {
     return this.#queue.iterate()
   }
 
-  static buildToolApproval(prompt: string, pending: PendingTool | undefined, policy: ToolApprovalPolicy): ToolApproval | undefined {
-    if (policy !== "ask") return undefined
-    if (!pending) return undefined
-    if (prompt.trim() === "/approve") {
-      return { userApproved: true, toolName: pending.toolName, type: "approve-for-session" }
-    }
-    if (prompt.trim() === "/reject") {
-      return { userApproved: false, message: "User rejected tool call" }
-    }
-    return undefined
-  }
+
 
   // ---------------------------------------------------------------------------
   // Private: project / workflow resolution

@@ -1,9 +1,6 @@
-export type ToolApprovalPolicy = "ask" | "auto" | "deny"
-
 export type GitLabDuoAgenticProviderOptions = {
   instanceUrl: string
   apiKey: string
-  toolApproval?: ToolApprovalPolicy
   sendSystemContext?: boolean
   enableMcp?: boolean
   systemRules?: string
@@ -18,18 +15,12 @@ export type AIContextItem = {
 
 export type WorkflowType = "chat" | "software_development" | "search_and_replace"
 
-export type ToolApproval =
-  | { userApproved: true; toolName: string; type: "approve_once" | "approve-for-session" }
-  | { userApproved: false; message?: string }
-
 export type DuoWorkflowEvent = {
   checkpoint: string
   errors: string[]
   workflowGoal: string
   workflowStatus: string
 }
-
-export type ToolInputDisplay = { tool: "generic"; name: string; args: Record<string, unknown> }
 
 type PlainTextResponse = {
   response: string
@@ -63,10 +54,6 @@ export type ClientEvent = {
     preapproved_tools: string[]
     flowConfig?: unknown
     flowConfigSchemaVersion?: string
-    approval?: {
-      approval?: Record<string, never>
-      rejection?: { message?: string }
-    }
   }
 }
 
