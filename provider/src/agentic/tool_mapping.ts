@@ -283,6 +283,8 @@ const OPENCODE_BUILTIN_TOOL_NAMES = new Set([
   "glob",
   "patch",
   "skill",
+  "todowrite",
+  "todoread",
   "webfetch",
   "websearch",
   "question",
