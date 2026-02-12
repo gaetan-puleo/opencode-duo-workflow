@@ -149,32 +149,6 @@ export function mapDuoToolRequest(
         args: { command: gitCommand, description: "Run git command", workdir: "." },
       }
     }
-    case "gitlab_api_request": {
-      const method = asString(args.method) ?? "GET"
-      const apiPath = asString(args.path)
-      if (!apiPath) return { toolName, args }
-      const body = asString(args.body)
-      const curlParts = [
-        "curl -s -w",
-        shellQuote("\\n%{http_code}"),
-        "-X",
-        method.toUpperCase(),
-        "-H",
-        shellQuote("Authorization: Bearer $GITLAB_TOKEN"),
-        "-H",
-        shellQuote("Content-Type: application/json"),
-      ]
-      if (body) {
-        curlParts.push("-d", shellQuote(body))
-      }
-      const instanceUrl = (process.env.GITLAB_INSTANCE_URL || "https://gitlab.com").replace(/\/$/, "")
-      const fullUrl = apiPath.startsWith("http") ? apiPath : `${instanceUrl}${apiPath.startsWith("/") ? "" : "/"}${apiPath}`
-      curlParts.push(shellQuote(fullUrl))
-      return {
-        toolName: "bash",
-        args: { command: curlParts.join(" "), description: "GitLab API request", workdir: "." },
-      }
-    }
     default:
       return { toolName, args }
   }
@@ -306,21 +280,7 @@ const DUO_MCP_TOOLS: Array<{ name: string; description: string; schema: unknown 
       required: ["repository_url", "command"],
     },
   },
-  // Disabled: gitlab_api_request is not advertised to the Duo agent.
-  // The mapping in mapDuoToolRequest() is kept as a defensive fallback.
-  // {
-  //   name: "gitlab_api_request",
-  //   description: "Make an authenticated HTTP request to the GitLab REST API.",
-  //   schema: {
-  //     type: "object",
-  //     properties: {
-  //       method: { type: "string", description: "HTTP method (GET, POST, PATCH, PUT)." },
-  //       path: { type: "string", description: "GitLab API path (e.g. /api/v4/projects)." },
-  //       body: { type: "string", description: "JSON-encoded request body (optional)." },
-  //     },
-  //     required: ["method", "path"],
-  //   },
-  // },
+
 ]
 
 // ---------------------------------------------------------------------------
