@@ -13,25 +13,30 @@ import crypto from "node:crypto"
 // Tool definitions
 // ---------------------------------------------------------------------------
 
-export const SIMULATED_TOOL_NAMES = new Set(["todowrite", "todoread", "task"])
+// [DISABLED] Uncomment tool names to enable simulated tool calls
+export const SIMULATED_TOOL_NAMES = new Set<string>([
+  // "todowrite",
+  // "todoread",
+  // "task",
+])
 
 const TOOL_SCHEMAS: Record<string, string> = {
-  todowrite: [
-    "todowrite: Manage a structured task list. Args:",
-    '  { "todos": [{ "id": "unique-id", "content": "task description",',
-    '    "status": "pending" | "in_progress" | "completed" | "cancelled",',
-    '    "priority": "low" | "medium" | "high" }] }',
-    "  Pass the FULL todo list each time (not just changes).",
-  ].join("\n"),
-  todoread: [
-    "todoread: Read the current todo list. Args: {}",
-  ].join("\n"),
-  task: [
-    "task: Launch a sub-agent for complex tasks. Args:",
-    '  { "description": "short 3-5 word label",',
-    '    "prompt": "detailed task description for the agent",',
-    '    "subagent_type": "general" | "explore" | "code-research" }',
-  ].join("\n"),
+  // todowrite: [
+  //   "todowrite: Manage a structured task list. Args:",
+  //   '  { "todos": [{ "id": "unique-id", "content": "task description",',
+  //   '    "status": "pending" | "in_progress" | "completed" | "cancelled",',
+  //   '    "priority": "low" | "medium" | "high" }] }',
+  //   "  Pass the FULL todo list each time (not just changes).",
+  // ].join("\n"),
+  // todoread: [
+  //   "todoread: Read the current todo list. Args: {}",
+  // ].join("\n"),
+  // task: [
+  //   "task: Launch a sub-agent for complex tasks. Args:",
+  //   '  { "description": "short 3-5 word label",',
+  //   '    "prompt": "detailed task description for the agent",',
+  //   '    "subagent_type": "general" | "explore" | "code-research" }',
+  // ].join("\n"),
 }
 
 // ---------------------------------------------------------------------------
