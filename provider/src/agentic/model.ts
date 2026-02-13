@@ -83,17 +83,21 @@ export class GitLabDuoAgenticLanguageModel implements LanguageModelV2 {
     this.#runtime.setSessionId(sessionId)
     this.#runtime.resetMapperState()
 
-    // When stream has ended (new turn), clear per-turn state and mark all
-    // existing tool results as already processed so they don't get re-sent.
+    // When stream has ended (new turn), clear per-turn state and mark
+    // existing tool results as already processed — but keep results that
+    // have a pending request (tool executed but result not yet sent to DWS,
+    // e.g. because the WebSocket closed before we could send it back).
     if (!this.#runtime.hasStarted) {
       this.#sentToolCallIds.clear()
+      for (const r of toolResults) {
+        if (!this.#pendingToolRequests.has(r.toolCallId)) {
+          this.#sentToolCallIds.add(r.toolCallId)
+        }
+      }
       this.#pendingToolRequests.clear()
       this.#multiCallGroups.clear()
       // [DISABLED] this.#simulatedToolQueue = []
       this.#lastSentPrompt = null
-      for (const r of toolResults) {
-        this.#sentToolCallIds.add(r.toolCallId)
-      }
     }
 
     const freshToolResults = toolResults.filter((r) => !this.#sentToolCallIds.has(r.toolCallId))
