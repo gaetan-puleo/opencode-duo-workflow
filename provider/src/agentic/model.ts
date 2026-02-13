@@ -11,7 +11,7 @@ import { GitLabAgenticRuntime } from "./runtime"
 import { asyncIteratorToReadableStream } from "./stream_adapter"
 import { createLogger } from "./logger"
 import { extractLastUserText, extractSystemPrompt, extractToolResults } from "./prompt_utils"
-import { buildMcpTools, buildToolContext, mapDuoToolRequest } from "./tool_mapping"
+import { buildMcpTools, buildToolContext, mapDuoToolRequest, type MappedToolCall } from "./tool_mapping"
 // [DISABLED] Simulated tool calls for todowrite/todoread/task — uncomment to enable
 // import {
 //   buildSimulatedToolPrompt,
@@ -32,6 +32,7 @@ export class GitLabDuoAgenticLanguageModel implements LanguageModelV2 {
   #logger = createLogger()
   #runtime: GitLabAgenticRuntime
   #pendingToolRequests = new Map<string, { toolName: string; responseType?: string }>()
+  #multiCallGroups = new Map<string, { subIds: string[]; collected: Map<string, string>; responseType?: string }>()
   #sentToolCallIds = new Set<string>()
   #lastSentPrompt: string | null = null
   #mcpTools: Array<{ name: string; description?: string; schema?: unknown; isApproved?: boolean }> = []
@@ -90,6 +91,7 @@ export class GitLabDuoAgenticLanguageModel implements LanguageModelV2 {
       }
       this.#sentToolCallIds.clear()
       this.#pendingToolRequests.clear()
+      this.#multiCallGroups.clear()
       // [DISABLED] this.#simulatedToolQueue = []
       this.#lastSentPrompt = null
       for (const r of toolResults) {
@@ -126,6 +128,32 @@ export class GitLabDuoAgenticLanguageModel implements LanguageModelV2 {
         //   sentToolResults = true
         //   continue
         // }
+
+        // Check if this result belongs to a multi-call group (e.g. read_files)
+        const hashIdx = result.toolCallId.indexOf("#")
+        if (hashIdx !== -1) {
+          const originalId = result.toolCallId.substring(0, hashIdx)
+          const group = this.#multiCallGroups.get(originalId)
+          if (group) {
+            group.collected.set(result.toolCallId, result.error ?? result.output)
+            this.#sentToolCallIds.add(result.toolCallId)
+            this.#pendingToolRequests.delete(result.toolCallId)
+
+            if (group.collected.size === group.subIds.length) {
+              // All sub-results collected — aggregate and send to DWS
+              const aggregated = group.subIds.map((id) => group.collected.get(id) ?? "").join("\n")
+              this.#logger.warn(`multiCall complete: ${originalId} (${group.subIds.length} calls) outputLen=${aggregated.length}`)
+              this.#runtime.sendToolResponse(
+                originalId,
+                { output: aggregated },
+                group.responseType as "plain" | "http" | undefined,
+              )
+              this.#multiCallGroups.delete(originalId)
+              this.#pendingToolRequests.delete(originalId)
+            }
+            continue
+          }
+        }
 
         const pending = this.#pendingToolRequests.get(result.toolCallId)
         this.#logger.warn(`toolResult: id=${result.toolCallId} tool=${result.toolName} error=${!!result.error} pending=${!!pending} outputLen=${result.output?.length ?? 0}`)
@@ -279,8 +307,22 @@ export class GitLabDuoAgenticLanguageModel implements LanguageModelV2 {
       if (event.type === "TOOL_REQUEST") {
         const args = event.args as Record<string, unknown>
         const mapped = mapDuoToolRequest(event.toolName, args)
-        this.#logger.warn(`toolRequest: ${event.toolName} -> ${mapped.toolName} args=${JSON.stringify(args).slice(0, 200)}`)
         const responseType = (event as { responseType?: string }).responseType as "plain" | "http" | undefined
+
+        if (Array.isArray(mapped)) {
+          // Multi-call expansion (e.g. read_files → N × read)
+          const subIds = mapped.map((_, i) => `${event.requestId}#${i}`)
+          this.#multiCallGroups.set(event.requestId, { subIds, collected: new Map(), responseType })
+          this.#pendingToolRequests.set(event.requestId, { toolName: event.toolName, responseType })
+          for (const subId of subIds) {
+            this.#pendingToolRequests.set(subId, { toolName: mapped[0].toolName })
+          }
+          this.#logger.warn(`toolRequest (multi): ${event.toolName} -> ${mapped.length}x ${mapped[0].toolName}`)
+          yield* this.#emitMultiToolCalls(subIds, mapped, usage)
+          return
+        }
+
+        this.#logger.warn(`toolRequest: ${event.toolName} -> ${mapped.toolName} args=${JSON.stringify(args).slice(0, 200)}`)
         this.#pendingToolRequests.set(event.requestId, { toolName: event.toolName, responseType })
         yield* this.#emitToolCall(event.requestId, mapped.toolName, mapped.args, usage)
         return
@@ -339,6 +381,21 @@ export class GitLabDuoAgenticLanguageModel implements LanguageModelV2 {
     yield { type: "tool-input-delta" as const, id, delta: inputJson }
     yield { type: "tool-input-end" as const, id }
     yield { type: "tool-call", toolCallId: id, toolName, input: inputJson }
+    yield { type: "finish", finishReason: "tool-calls", usage }
+  }
+
+  *#emitMultiToolCalls(
+    ids: string[],
+    calls: MappedToolCall[],
+    usage: LanguageModelV2Usage,
+  ): Generator<LanguageModelV2StreamPart> {
+    for (let i = 0; i < calls.length; i++) {
+      const inputJson = JSON.stringify(calls[i].args ?? {})
+      yield { type: "tool-input-start" as const, id: ids[i], toolName: calls[i].toolName }
+      yield { type: "tool-input-delta" as const, id: ids[i], delta: inputJson }
+      yield { type: "tool-input-end" as const, id: ids[i] }
+      yield { type: "tool-call", toolCallId: ids[i], toolName: calls[i].toolName, input: inputJson }
+    }
     yield { type: "finish", finishReason: "tool-calls", usage }
   }
 }

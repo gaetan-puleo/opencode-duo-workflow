@@ -19,15 +19,17 @@ function shellQuote(value: string): string {
 // Duo → OpenCode tool mapping
 // ---------------------------------------------------------------------------
 
+export type MappedToolCall = { toolName: string; args: Record<string, unknown> }
+
 /**
- * Translate a Duo workflow tool name + args into an OpenCode-native tool call.
- * For example `read_file` becomes the OpenCode `read` tool, `list_dir` becomes
- * a `bash` call with `ls -la`, etc.
+ * Translate a Duo workflow tool name + args into one or more OpenCode-native
+ * tool calls.  Returns an array when a single Duo tool expands to multiple
+ * OpenCode calls (e.g. `read_files` → N × `read`).
  */
 export function mapDuoToolRequest(
   toolName: string,
   args: Record<string, unknown>,
-): { toolName: string; args: Record<string, unknown> } {
+): MappedToolCall | MappedToolCall[] {
   switch (toolName) {
     case "list_dir": {
       const directory = asString(args.directory) ?? "."
@@ -52,7 +54,7 @@ export function mapDuoToolRequest(
     case "read_files": {
       const filePaths = asStringArray(args.file_paths)
       if (filePaths.length === 0) return { toolName, args }
-      return { toolName: "read_files", args: { file_paths: filePaths } }
+      return filePaths.map((fp) => ({ toolName: "read", args: { filePath: fp } }))
     }
     case "create_file_with_contents": {
       const filePath = asString(args.file_path)
