@@ -77,7 +77,7 @@ export class GitLabDuoAgenticLanguageModel implements LanguageModelV2 {
     const workflowType: WorkflowType = "chat"
     const promptText = extractLastUserText(options.prompt)
     const toolResults = extractToolResults(options.prompt)
-    this.#logger.warn(`doStream: prompt=${promptText?.slice(0, 80) ?? "(none)"} toolResults=${toolResults.length}`)
+    this.#logger.warn(`doStream: prompt=${promptText?.slice(0, 80) ?? "(none)"} toolResults=${toolResults.length} tools=[${toolResults.map((r) => r.toolName).join(",")}]`)
     const providerOpts = (options.providerOptions as Record<string, Record<string, unknown>> | undefined)?.["gitlab-duo-agentic-unofficial"]
     const sessionId = providerOpts?.opencodeSessionId as string | undefined
     this.#runtime.setSessionId(sessionId)
@@ -290,54 +290,66 @@ export class GitLabDuoAgenticLanguageModel implements LanguageModelV2 {
     // [DISABLED] Buffer text for simulated tool detection at stream end
     // let textBuffer = ""
 
-    for await (const event of events) {
-      if (event.type === "TEXT_CHUNK") {
-        if (event.content.length > 0) {
-          yield* this.#emitTextDelta(state, event.content)
-          // [DISABLED] textBuffer += event.content
-        }
-        continue
-      }
-
-      if (event.type === "TOOL_COMPLETE") {
-        this.#logger.warn(`toolComplete: id=${event.toolId} (ignored, handled locally by OpenCode)`)
-        continue
-      }
-
-      if (event.type === "TOOL_REQUEST") {
-        const args = event.args as Record<string, unknown>
-        const mapped = mapDuoToolRequest(event.toolName, args)
-        const responseType = (event as { responseType?: string }).responseType as "plain" | "http" | undefined
-
-        if (Array.isArray(mapped)) {
-          // Multi-call expansion (e.g. read_files → N × read)
-          const subIds = mapped.map((_, i) => `${event.requestId}#${i}`)
-          this.#multiCallGroups.set(event.requestId, { subIds, collected: new Map(), responseType })
-          this.#pendingToolRequests.set(event.requestId, { toolName: event.toolName, responseType })
-          for (const subId of subIds) {
-            this.#pendingToolRequests.set(subId, { toolName: mapped[0].toolName })
+    try {
+      for await (const event of events) {
+        if (event.type === "TEXT_CHUNK") {
+          if (event.content.length > 0) {
+            yield* this.#emitTextDelta(state, event.content)
+            // [DISABLED] textBuffer += event.content
           }
-          this.#logger.warn(`toolRequest (multi): ${event.toolName} -> ${mapped.length}x ${mapped[0].toolName}`)
-          yield* this.#emitMultiToolCalls(subIds, mapped, usage)
+          continue
+        }
+
+        if (event.type === "TOOL_COMPLETE") {
+          this.#logger.warn(`toolComplete: id=${event.toolId} (ignored, handled locally by OpenCode)`)
+          continue
+        }
+
+        if (event.type === "TOOL_REQUEST") {
+          const args = event.args as Record<string, unknown>
+          let mapped: ReturnType<typeof mapDuoToolRequest>
+          try {
+            mapped = mapDuoToolRequest(event.toolName, args)
+          } catch (err) {
+            this.#logger.error(`mapDuoToolRequest threw: ${err}`)
+            continue
+          }
+          const responseType = (event as { responseType?: string }).responseType as "plain" | "http" | undefined
+
+          if (Array.isArray(mapped)) {
+            // Multi-call expansion (e.g. read_files → N × read)
+            const subIds = mapped.map((_, i) => `${event.requestId}#${i}`)
+            this.#multiCallGroups.set(event.requestId, { subIds, collected: new Map(), responseType })
+            this.#pendingToolRequests.set(event.requestId, { toolName: event.toolName, responseType })
+            for (const subId of subIds) {
+              this.#pendingToolRequests.set(subId, { toolName: mapped[0].toolName })
+            }
+            this.#logger.warn(`toolRequest (multi): ${event.toolName} -> ${mapped.length}x ${mapped[0].toolName}`)
+            yield* this.#emitMultiToolCalls(subIds, mapped, usage)
+            return
+          }
+
+          this.#logger.warn(`toolRequest: ${event.toolName} -> ${mapped.toolName} args=${JSON.stringify(args).slice(0, 200)}`)
+          this.#pendingToolRequests.set(event.requestId, { toolName: event.toolName, responseType })
+          yield* this.#emitToolCall(event.requestId, mapped.toolName, mapped.args, usage)
           return
         }
 
-        this.#logger.warn(`toolRequest: ${event.toolName} -> ${mapped.toolName} args=${JSON.stringify(args).slice(0, 200)}`)
-        this.#pendingToolRequests.set(event.requestId, { toolName: event.toolName, responseType })
-        yield* this.#emitToolCall(event.requestId, mapped.toolName, mapped.args, usage)
-        return
-      }
-
-      if (event.type === "ERROR") {
-        this.#logger.error(`stream event ERROR: ${event.message}`)
-        const msg = event.message
-        if (msg.includes("1013") || msg.includes("lock")) {
-          yield { type: "error", error: new Error("GitLab Duo workflow is locked (another session may still be active). Please try again in a few seconds.") }
-        } else {
-          yield { type: "error", error: new Error(`GitLab Duo: ${msg}`) }
+        if (event.type === "ERROR") {
+          this.#logger.error(`stream event ERROR: ${event.message}`)
+          const msg = event.message
+          if (msg.includes("1013") || msg.includes("lock")) {
+            yield { type: "error", error: new Error("GitLab Duo workflow is locked (another session may still be active). Please try again in a few seconds.") }
+          } else {
+            yield { type: "error", error: new Error(`GitLab Duo: ${msg}`) }
+          }
+          return
         }
-        return
       }
+    } catch (streamErr) {
+      this.#logger.error(`stream iteration error: ${streamErr}`)
+      yield { type: "error", error: streamErr instanceof Error ? streamErr : new Error(String(streamErr)) }
+      return
     }
 
     // [DISABLED] Stream ended: check buffered text for simulated tool calls
