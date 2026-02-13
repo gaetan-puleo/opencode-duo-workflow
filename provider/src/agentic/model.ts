@@ -77,7 +77,7 @@ export class GitLabDuoAgenticLanguageModel implements LanguageModelV2 {
     const workflowType: WorkflowType = "chat"
     const promptText = extractLastUserText(options.prompt)
     const toolResults = extractToolResults(options.prompt)
-    this.#logger.warn(`doStream: prompt=${promptText?.slice(0, 80) ?? "(none)"} toolResults=${toolResults.length} tools=[${toolResults.map((r) => r.toolName).join(",")}]`)
+    this.#logger.warn(`doStream: toolResults=${toolResults.length} tools=[${toolResults.map((r) => r.toolName).join(",")}]`)
     const providerOpts = (options.providerOptions as Record<string, Record<string, unknown>> | undefined)?.["gitlab-duo-agentic-unofficial"]
     const sessionId = providerOpts?.opencodeSessionId as string | undefined
     this.#runtime.setSessionId(sessionId)
@@ -86,9 +86,6 @@ export class GitLabDuoAgenticLanguageModel implements LanguageModelV2 {
     // When stream has ended (new turn), clear per-turn state and mark all
     // existing tool results as already processed so they don't get re-sent.
     if (!this.#runtime.hasStarted) {
-      if (this.#sentToolCallIds.size > 0) {
-        this.#logger.warn(`new turn: clearing per-turn state (sentIds=${this.#sentToolCallIds.size})`)
-      }
       this.#sentToolCallIds.clear()
       this.#pendingToolRequests.clear()
       this.#multiCallGroups.clear()
@@ -100,7 +97,6 @@ export class GitLabDuoAgenticLanguageModel implements LanguageModelV2 {
     }
 
     const freshToolResults = toolResults.filter((r) => !this.#sentToolCallIds.has(r.toolCallId))
-    this.#logger.warn(`fresh=${freshToolResults.length} stale=${toolResults.length - freshToolResults.length} sent=${this.#sentToolCallIds.size}`)
 
     const modelRef = this.modelId === "duo-agentic" ? undefined : this.modelId
     this.#runtime.setSelectedModelIdentifier(modelRef)
@@ -118,7 +114,6 @@ export class GitLabDuoAgenticLanguageModel implements LanguageModelV2 {
 
     // --- Handle tool results (send back to workflow service) ---
     if (freshToolResults.length > 0) {
-      this.#logger.warn(`sending ${freshToolResults.length} tool results to workflow`)
       for (const result of freshToolResults) {
         // [DISABLED] Simulated tool results are NOT forwarded to DWS — it never knew about them
         // if (isSimulatedToolCallId(result.toolCallId)) {
@@ -301,7 +296,6 @@ export class GitLabDuoAgenticLanguageModel implements LanguageModelV2 {
         }
 
         if (event.type === "TOOL_COMPLETE") {
-          this.#logger.warn(`toolComplete: id=${event.toolId} (ignored, handled locally by OpenCode)`)
           continue
         }
 

@@ -89,7 +89,6 @@ export class GitLabAgenticRuntime {
 
   async ensureConnected(goal: string, workflowType: WorkflowType): Promise<void> {
     if (this.#stream && this.#currentWorkflowId && this.#queue) {
-      this.#logger.warn("already connected, reusing")
       return
     }
 
@@ -104,10 +103,8 @@ export class GitLabAgenticRuntime {
       this.#logger.warn(`workflow=${this.#currentWorkflowId} type=${workflowType}`)
     }
 
-    this.#logger.warn(`fetching workflow token for type=${workflowType}`)
     const token = await getWorkflowToken(this.#options.instanceUrl, this.#options.apiKey, workflowType)
     this.#workflowToken = token
-    this.#logger.warn("workflow token acquired")
 
     const MAX_LOCK_RETRIES = 3
     const LOCK_RETRY_DELAY_MS = 3000
@@ -307,7 +304,12 @@ export class GitLabAgenticRuntime {
         if (interesting.length > 0) {
           this.#logger.warn(`ckpt ${action.newCheckpoint.status} → ${interesting.map((e) => e.type).join(", ")}`)
         }
-        for (const event of events) queue.push(event)
+        for (const event of events) {
+          if (event.type === "TOOL_REQUEST") {
+            this.#pendingTool = { requestId: event.requestId, toolName: event.toolName }
+          }
+          queue.push(event)
+        }
         return
       }
 

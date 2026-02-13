@@ -1,3 +1,4 @@
+import crypto from "node:crypto"
 import type { DuoWorkflowEvent } from "./types"
 import { extractUiChatLog } from "./ui_chat_log"
 import type { Logger } from "./logger"
@@ -5,6 +6,7 @@ import type { Logger } from "./logger"
 export type AgentEvent =
   | { type: "TEXT_CHUNK"; messageId: string; content: string; timestamp: number }
   | { type: "TOOL_COMPLETE"; toolId: string; result: string; error?: string; timestamp: number }
+  | { type: "TOOL_REQUEST"; requestId: string; toolName: string; args: Record<string, unknown>; timestamp: number }
   | { type: "ERROR"; message: string; timestamp: number }
 
 export class WorkflowEventMapper {
@@ -39,7 +41,6 @@ export class WorkflowEventMapper {
 
     const latestMessage = workflowMessages[workflowMessages.length - 1]
     const latestMessageIndex = workflowMessages.length - 1
-    this.#logger.warn(`mapper: ${workflowMessages.length} messages, latest[${latestMessageIndex}]=${latestMessage.message_type}`)
 
     switch (latestMessage.message_type) {
       case "user":
@@ -87,14 +88,19 @@ export class WorkflowEventMapper {
       }
 
       case "request": {
-        // Checkpoint approval requests are informational only — the direct
-        // WebSocket action (TOOL_REQUEST) handles actual execution.
-        this.#logger.warn(`mapper request (ignored): tool=${latestMessage.tool_info.name} args=${JSON.stringify(latestMessage.tool_info.args).slice(0, 200)}`)
+        const requestId = latestMessage.correlation_id || crypto.randomUUID()
+        this.#logger.warn(`mapper request: tool=${latestMessage.tool_info.name} requestId=${requestId} args=${JSON.stringify(latestMessage.tool_info.args).slice(0, 200)}`)
+        events.push({
+          type: "TOOL_REQUEST",
+          requestId,
+          toolName: latestMessage.tool_info.name,
+          args: (latestMessage.tool_info.args ?? {}) as Record<string, unknown>,
+          timestamp: this.#parseTimestamp(latestMessage.timestamp),
+        })
         break
       }
 
       case "tool": {
-        this.#logger.warn(`mapper tool: name=${latestMessage.tool_info?.name ?? "null"} hasResponse=${!!latestMessage.tool_info?.tool_response} contentLen=${latestMessage.content?.length ?? 0}`)
         const toolId = `${latestMessageIndex}`
         const timestamp = this.#parseTimestamp(latestMessage.timestamp)
 
