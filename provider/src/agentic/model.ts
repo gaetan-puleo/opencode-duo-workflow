@@ -77,7 +77,6 @@ export class GitLabDuoAgenticLanguageModel implements LanguageModelV2 {
     const workflowType: WorkflowType = "chat"
     const promptText = extractLastUserText(options.prompt)
     const toolResults = extractToolResults(options.prompt)
-    this.#logger.warn(`doStream: toolResults=${toolResults.length} tools=[${toolResults.map((r) => r.toolName).join(",")}]`)
     const providerOpts = (options.providerOptions as Record<string, Record<string, unknown>> | undefined)?.["gitlab-duo-agentic-unofficial"]
     const sessionId = providerOpts?.opencodeSessionId as string | undefined
     this.#runtime.setSessionId(sessionId)
@@ -112,6 +111,7 @@ export class GitLabDuoAgenticLanguageModel implements LanguageModelV2 {
     this.#toolContext = toolContext
 
     const agentPrompt = providerOpts?.agentPrompt as string | undefined
+    this.#logger.warn(`agentPrompt=${agentPrompt ? `present (${agentPrompt.length} chars)` : "undefined"} hasStarted=${this.#runtime.hasStarted}`)
     const isNewUserMessage = promptText != null && promptText !== this.#lastSentPrompt
 
     let sentToolResults = false
@@ -216,25 +216,25 @@ export class GitLabDuoAgenticLanguageModel implements LanguageModelV2 {
             },
           })
         }
-        this.#logger.warn(`sending initial startRequest: prompt=${promptText!.slice(0, 80)} systemPromptLen=${systemPrompt?.length ?? 0}`)
       } else {
-        // Follow-up message: send only the agent prompt (plan/build/explore/custom)
-        if (agentPrompt) {
+        // Follow-up message: send agent prompt if available, otherwise fall back
+        // to the full system prompt (for agents like 'build' that have no .prompt)
+        const promptContent = agentPrompt ?? extractSystemPrompt(options.prompt)
+        if (promptContent) {
           extraContext.push({
             category: "agent_context",
-            content: agentPrompt,
-            id: "opencode_agent_prompt",
+            content: promptContent,
+            id: "opencode_system_prompt",
             metadata: {
-              title: "OpenCode Agent Prompt",
+              title: "OpenCode System Prompt",
               enabled: true,
-              subType: "agent_prompt",
+              subType: "system_prompt",
               icon: "file-text",
-              secondaryText: "Agent prompt",
-              subTypeLabel: "Agent Prompt",
+              secondaryText: "System prompt",
+              subTypeLabel: "System Prompt",
             },
           })
         }
-        this.#logger.warn(`sending follow-up startRequest: prompt=${promptText!.slice(0, 80)} hasAgentPrompt=${!!agentPrompt}`)
       }
 
       this.#runtime.sendStartRequest(

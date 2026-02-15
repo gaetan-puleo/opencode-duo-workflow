@@ -62,7 +62,6 @@ export class GitLabAgenticRuntime {
 
   setSessionId(sessionId?: string): void {
     if (sessionId && sessionId !== this.#sessionId) {
-      this.#logger.warn(`session changed: ${this.#sessionId ?? "(none)"} -> ${sessionId}, resetting connection`)
       this.#resetStreamState()
     }
     this.#sessionId = sessionId
@@ -70,7 +69,6 @@ export class GitLabAgenticRuntime {
 
   setSelectedModelIdentifier(ref?: string): void {
     if (ref === this.#selectedModelIdentifier) return
-    this.#logger.warn(`model changed: ${this.#selectedModelIdentifier ?? "(default)"} -> ${ref ?? "(default)"}`)
     this.#selectedModelIdentifier = ref
     this.#resetStreamState()
   }
@@ -93,14 +91,11 @@ export class GitLabAgenticRuntime {
     }
 
     if (!this.#containerParams) {
-      this.#logger.warn(`detecting project from cwd=${process.cwd()} instance=${this.#options.instanceUrl}`)
       this.#containerParams = await this.#resolveContainerParams()
-      this.#logger.warn(`resolved project=${this.#containerParams.projectId} namespace=${this.#containerParams.namespaceId}`)
     }
 
     if (!this.#currentWorkflowId) {
       this.#currentWorkflowId = await this.#ensureWorkflow(goal, workflowType)
-      this.#logger.warn(`workflow=${this.#currentWorkflowId} type=${workflowType}`)
     }
 
     const token = await getWorkflowToken(this.#options.instanceUrl, this.#options.apiKey, workflowType)
@@ -112,9 +107,8 @@ export class GitLabAgenticRuntime {
     for (let attempt = 1; attempt <= MAX_LOCK_RETRIES; attempt++) {
       this.#queue = new AsyncQueue<RuntimeEvent>()
       try {
-        this.#logger.warn(`connecting websocket to ${this.#options.instanceUrl} (attempt ${attempt}/${MAX_LOCK_RETRIES})`)
+        this.#logger.warn(`connecting websocket (attempt ${attempt}/${MAX_LOCK_RETRIES})`)
         await this.#connectWebSocket()
-        this.#logger.warn("websocket connected")
         return
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err)
@@ -148,7 +142,6 @@ export class GitLabAgenticRuntime {
     extraContext: Array<{ category: string; content?: string | null; id?: string; metadata?: Record<string, unknown> }> = [],
   ): void {
     if (!this.#stream || !this.#currentWorkflowId) throw new Error("Workflow client not initialized")
-    this.#logger.warn(`startRequest: tools=${mcpTools.length} preapproved=${preapprovedTools.length}`)
     const additionalContext =
       this.#options.sendSystemContext === false
         ? []
@@ -250,10 +243,8 @@ export class GitLabAgenticRuntime {
   async #ensureWorkflow(goal: string, workflowType: WorkflowType): Promise<string> {
     await this.#loadWorkflowId()
     if (this.#currentWorkflowId) {
-      this.#logger.warn(`reusing cached workflow=${this.#currentWorkflowId}`)
       return this.#currentWorkflowId
     }
-    this.#logger.warn(`creating new workflow type=${workflowType}`)
     try {
       const workflowId = await createWorkflow(
         this.#options.instanceUrl,
@@ -263,7 +254,6 @@ export class GitLabAgenticRuntime {
         this.#containerParams,
       )
       this.#currentWorkflowId = workflowId
-      this.#logger.warn(`created workflow=${workflowId}`)
       await this.#persistWorkflowId()
       return workflowId
     } catch (error) {
@@ -300,10 +290,6 @@ export class GitLabAgenticRuntime {
           workflowStatus: action.newCheckpoint.status,
         }
         const events = await this.#mapper.mapWorkflowEvent(duoEvent)
-        const interesting = events.filter((e) => e.type !== "TEXT_CHUNK")
-        if (interesting.length > 0) {
-          this.#logger.warn(`ckpt ${action.newCheckpoint.status} → ${interesting.map((e) => e.type).join(", ")}`)
-        }
         for (const event of events) {
           if (event.type === "TOOL_REQUEST") {
             this.#pendingTool = { requestId: event.requestId, toolName: event.toolName }
@@ -344,7 +330,6 @@ export class GitLabAgenticRuntime {
         this.#resetStreamState()
       })
       ;(stream as any).on("end", () => {
-        this.#logger.warn("stream ended")
         queue.close()
         this.#resetStreamState()
       })
@@ -393,10 +378,9 @@ export class GitLabAgenticRuntime {
       const entry = data[this.#sessionId]
       if (entry?.workflowId) {
         this.#currentWorkflowId = entry.workflowId
-        this.#logger.warn(`loaded cached workflowId=${entry.workflowId} for session=${this.#sessionId}`)
       }
     } catch {
-      this.#logger.warn(`no cached workflow for session=${this.#sessionId}`)
+      // no cached workflow
     }
   }
 
