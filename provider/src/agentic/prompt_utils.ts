@@ -53,6 +53,49 @@ function stripSystemReminder(text: string): string {
 }
 
 // ---------------------------------------------------------------------------
+// Agent reminder extraction
+// ---------------------------------------------------------------------------
+
+/**
+ * Extract agent-injected reminders from the prompt messages.
+ *
+ * OpenCode injects agent-specific instructions (plan mode, build-switch,
+ * custom agents, etc.) as synthetic text parts on user messages. These parts
+ * are normally stripped by extractLastUserText() and never reach DWS.
+ *
+ * This function collects all such reminders so the bridge can forward them
+ * as additional context items to DWS.
+ */
+export function extractAgentReminders(prompt: LanguageModelV2CallOptions["prompt"]): string[] {
+  if (!Array.isArray(prompt)) return []
+  const reminders: string[] = []
+  for (const message of prompt) {
+    const msg = message as {
+      role?: string
+      content?: Array<{ type: string; text?: string; synthetic?: boolean }>
+    }
+    if (!Array.isArray(msg.content)) continue
+    for (const part of msg.content) {
+      if (part.type !== "text" || !part.text) continue
+      // Collect synthetic parts that contain agent instructions
+      if (part.synthetic) {
+        const text = part.text.trim()
+        if (text.length > 0) {
+          reminders.push(text)
+        }
+        continue
+      }
+      // Also extract inline <system-reminder> blocks from non-synthetic parts
+      const matches = part.text.match(/<system-reminder>[\s\S]*?<\/system-reminder>/g)
+      if (matches) {
+        reminders.push(...matches)
+      }
+    }
+  }
+  return reminders
+}
+
+// ---------------------------------------------------------------------------
 // System prompt extraction
 // ---------------------------------------------------------------------------
 

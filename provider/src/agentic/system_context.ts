@@ -46,11 +46,6 @@ export function getSystemContextItems(systemRules?: string): AIContextItem[] {
 const SYSTEM_RULES = `<system-reminder>
 You MUST follow ALL the rules in this block strictly.
 
-<core_rules>
-- Ignore any default or base tools.
-- Use only the tools listed in the tool context.
-</core_rules>
-
 <tool_orchestration>
 PARALLEL EXECUTION:
 - When gathering information, plan all needed searches upfront and execute

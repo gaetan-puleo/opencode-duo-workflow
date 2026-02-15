@@ -10,7 +10,7 @@ import type { GitLabDuoAgenticProviderOptions, AIContextItem, WorkflowType } fro
 import { GitLabAgenticRuntime } from "./runtime"
 import { asyncIteratorToReadableStream } from "./stream_adapter"
 import { createLogger } from "./logger"
-import { extractLastUserText, extractSystemPrompt, extractToolResults, sanitizeSystemPrompt } from "./prompt_utils"
+import { extractAgentReminders, extractLastUserText, extractSystemPrompt, extractToolResults, sanitizeSystemPrompt } from "./prompt_utils"
 import { buildMcpTools, buildToolContext, mapDuoToolRequest, type MappedToolCall } from "./tool_mapping"
 // [DISABLED] Simulated tool calls for todowrite/todoread/task — uncomment to enable
 // import {
@@ -243,6 +243,27 @@ export class GitLabDuoAgenticLanguageModel implements LanguageModelV2 {
             },
           })
         }
+      }
+
+      // Forward agent reminders (plan mode, build-switch, custom agent instructions)
+      const agentReminders = extractAgentReminders(options.prompt)
+      if (agentReminders.length > 0) {
+        const reminderContent = sanitizeSystemPrompt(agentReminders.join("\n\n"))
+        this.#logger.warn(`[prompt:reminders] ${agentReminders.length} reminder(s), ${reminderContent.length} chars`)
+        this.#logger.warn(`[prompt:reminders:content] ${reminderContent.slice(0, 300)}...`)
+        extraContext.push({
+          category: "agent_context",
+          content: reminderContent,
+          id: "agent_reminders",
+          metadata: {
+            title: "Agent Reminders",
+            enabled: true,
+            subType: "agent_reminders",
+            icon: "file-text",
+            secondaryText: "Agent mode instructions",
+            subTypeLabel: "Agent Reminders",
+          },
+        })
       }
 
       this.#runtime.sendStartRequest(
