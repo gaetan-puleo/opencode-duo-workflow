@@ -1,6 +1,5 @@
 import WebSocket from "isomorphic-ws"
 import { v4 as uuid4 } from "uuid"
-import type { Logger } from "./logger"
 import { WebSocketWorkflowStream } from "./websocket_stream"
 type WebSocketConnectionConfig = {
   gitlabInstanceUrl: URL
@@ -12,15 +11,13 @@ type WebSocketConnectionConfig = {
 }
 
 export class WebSocketWorkflowClient {
-  #logger: Logger
   #connectionDetails: WebSocketConnectionConfig
   #selectedModelIdentifier?: string
   #socket: WebSocket | null = null
   #stream: WebSocketWorkflowStream | null = null
   #correlationId = uuid4()
 
-  constructor(logger: Logger, connectionDetails: WebSocketConnectionConfig) {
-    this.#logger = logger
+  constructor(connectionDetails: WebSocketConnectionConfig) {
     this.#connectionDetails = connectionDetails
     this.#selectedModelIdentifier = connectionDetails.selectedModelIdentifier
   }
@@ -35,7 +32,7 @@ export class WebSocketWorkflowClient {
     }
 
     this.#socket = new WebSocket(url, clientOptions)
-    this.#stream = new WebSocketWorkflowStream(this.#socket, this.#logger)
+    this.#stream = new WebSocketWorkflowStream(this.#socket)
 
     await new Promise<void>((resolve, reject) => {
       const timeoutId = setTimeout(() => {

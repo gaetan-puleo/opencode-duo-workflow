@@ -9,27 +9,19 @@ import type {
 import type { GitLabDuoAgenticProviderOptions, AIContextItem, WorkflowType } from "./types"
 import { GitLabAgenticRuntime } from "./runtime"
 import { asyncIteratorToReadableStream } from "./stream_adapter"
-import { createLogger } from "./logger"
 import { extractAgentReminders, extractLastUserText, extractSystemPrompt, extractToolResults, sanitizeSystemPrompt } from "./prompt_utils"
 import { buildMcpTools, buildToolContext, mapDuoToolRequest, type MappedToolCall } from "./tool_mapping"
-// [DISABLED] Simulated tool calls for todowrite/todoread/task — uncomment to enable
-// import {
-//   buildSimulatedToolPrompt,
-//   extractSimulatedToolCalls,
-//   generateSimulatedToolCallId,
-//   isSimulatedToolCallId,
-// } from "./simulated_tools"
+import { TokenUsageEstimator } from "./token_usage"
 
 type StreamState = { textStarted: boolean }
 
 export class GitLabDuoAgenticLanguageModel implements LanguageModelV2 {
   readonly specificationVersion = "v2"
-  readonly provider = "gitlab-duo-agentic-unofficial"
+  readonly provider = "gitlab-duo-agentic"
   readonly modelId: string
   readonly supportedUrls: Record<string, RegExp[]> = {}
 
   #options: GitLabDuoAgenticProviderOptions
-  #logger = createLogger()
   #runtime: GitLabAgenticRuntime
   #pendingToolRequests = new Map<string, { toolName: string; responseType?: string }>()
   #multiCallGroups = new Map<string, { subIds: string[]; collected: Map<string, string>; responseType?: string }>()
@@ -37,8 +29,7 @@ export class GitLabDuoAgenticLanguageModel implements LanguageModelV2 {
   #lastSentPrompt: string | null = null
   #mcpTools: Array<{ name: string; description?: string; schema?: unknown; isApproved?: boolean }> = []
   #toolContext: AIContextItem | null = null
-  // [DISABLED] Simulated tool queue — uncomment to enable
-  // #simulatedToolQueue: Array<{ name: string; args: Record<string, unknown> }> = []
+  #usageEstimator = new TokenUsageEstimator()
 
   constructor(modelId: string, options: GitLabDuoAgenticProviderOptions, runtime: GitLabAgenticRuntime) {
     this.modelId = modelId
@@ -63,9 +54,9 @@ export class GitLabDuoAgenticLanguageModel implements LanguageModelV2 {
       content,
       finishReason,
       usage: {
-        inputTokens: undefined,
-        outputTokens: undefined,
-        totalTokens: undefined,
+        inputTokens: this.#usageEstimator.inputTokens,
+        outputTokens: this.#usageEstimator.outputTokens,
+        totalTokens: this.#usageEstimator.totalTokens,
       } satisfies LanguageModelV2Usage,
       warnings: [],
     }
@@ -77,7 +68,7 @@ export class GitLabDuoAgenticLanguageModel implements LanguageModelV2 {
     const workflowType: WorkflowType = "chat"
     const promptText = extractLastUserText(options.prompt)
     const toolResults = extractToolResults(options.prompt)
-    const providerOpts = (options.providerOptions as Record<string, Record<string, unknown>> | undefined)?.["gitlab-duo-agentic-unofficial"]
+    const providerOpts = (options.providerOptions as Record<string, Record<string, unknown>> | undefined)?.["gitlab-duo-agentic"]
     const sessionId = providerOpts?.opencodeSessionId as string | undefined
     this.#runtime.setSessionId(sessionId)
     this.#runtime.resetMapperState()
@@ -95,8 +86,8 @@ export class GitLabDuoAgenticLanguageModel implements LanguageModelV2 {
       }
       this.#pendingToolRequests.clear()
       this.#multiCallGroups.clear()
-      // [DISABLED] this.#simulatedToolQueue = []
       this.#lastSentPrompt = null
+      this.#usageEstimator.reset()
     }
 
     const freshToolResults = toolResults.filter((r) => !this.#sentToolCallIds.has(r.toolCallId))
@@ -111,7 +102,6 @@ export class GitLabDuoAgenticLanguageModel implements LanguageModelV2 {
     this.#toolContext = toolContext
 
     const agentPrompt = providerOpts?.agentPrompt as string | undefined
-    this.#logger.warn(`agentPrompt=${agentPrompt ? `present (${agentPrompt.length} chars)` : "undefined"} hasStarted=${this.#runtime.hasStarted}`)
     const isNewUserMessage = promptText != null && promptText !== this.#lastSentPrompt
 
     let sentToolResults = false
@@ -119,14 +109,9 @@ export class GitLabDuoAgenticLanguageModel implements LanguageModelV2 {
     // --- Handle tool results (send back to workflow service) ---
     if (freshToolResults.length > 0) {
       for (const result of freshToolResults) {
-        // [DISABLED] Simulated tool results are NOT forwarded to DWS — it never knew about them
-        // if (isSimulatedToolCallId(result.toolCallId)) {
-        //   this.#logger.warn(`simToolResult: id=${result.toolCallId} tool=${result.toolName} (consumed locally, not forwarded to DWS)`)
-        //   this.#sentToolCallIds.add(result.toolCallId)
-        //   this.#pendingToolRequests.delete(result.toolCallId)
-        //   sentToolResults = true
-        //   continue
-        // }
+        // Track tool result content as input (sent to DWS)
+        this.#usageEstimator.addInputChars(result.output)
+        if (result.error) this.#usageEstimator.addInputChars(result.error)
 
         // Check if this result belongs to a multi-call group (e.g. read_files)
         const hashIdx = result.toolCallId.indexOf("#")
@@ -141,7 +126,6 @@ export class GitLabDuoAgenticLanguageModel implements LanguageModelV2 {
             if (group.collected.size === group.subIds.length) {
               // All sub-results collected — aggregate and send to DWS
               const aggregated = group.subIds.map((id) => group.collected.get(id) ?? "").join("\n")
-              this.#logger.warn(`multiCall complete: ${originalId} (${group.subIds.length} calls) outputLen=${aggregated.length}`)
               this.#runtime.sendToolResponse(
                 originalId,
                 { output: aggregated },
@@ -155,7 +139,6 @@ export class GitLabDuoAgenticLanguageModel implements LanguageModelV2 {
         }
 
         const pending = this.#pendingToolRequests.get(result.toolCallId)
-        this.#logger.warn(`toolResult: id=${result.toolCallId} tool=${result.toolName} error=${!!result.error} pending=${!!pending} outputLen=${result.output?.length ?? 0}`)
         this.#runtime.sendToolResponse(
           result.toolCallId,
           { output: result.output, error: result.error },
@@ -170,43 +153,15 @@ export class GitLabDuoAgenticLanguageModel implements LanguageModelV2 {
       sentToolResults = true
     }
 
-    // [DISABLED] Drain simulated tool queue (before touching DWS)
-    // if (this.#simulatedToolQueue.length > 0) {
-    //   this.#logger.warn(`draining simulated tool queue: ${this.#simulatedToolQueue.length} remaining`)
-    //   const iterator = this.#drainSimulatedQueue()
-    //   const stream = asyncIteratorToReadableStream(iterator)
-    //   return { stream }
-    // }
-
     // --- Send startRequest for new user messages ---
-    if (sentToolResults || !isNewUserMessage) {
-      this.#logger.warn(`[prompt:skipped] sentToolResults=${sentToolResults} isNewUserMessage=${isNewUserMessage} — no agent prompt sent this turn`)
-    }
     if (!sentToolResults && isNewUserMessage) {
       const extraContext: AIContextItem[] = []
       if (toolContext) extraContext.push(toolContext)
 
-      // [DISABLED] Simulated tool instructions
-      // extraContext.push({
-      //   category: "agent_context",
-      //   content: buildSimulatedToolPrompt(),
-      //   id: "opencode_simulated_tools",
-      //   metadata: {
-      //     title: "OpenCode Simulated Tools",
-      //     enabled: true,
-      //     subType: "simulated_tools",
-      //     icon: "wrench",
-      //     secondaryText: "Simulated tool instructions",
-      //     subTypeLabel: "Simulated Tools",
-      //   },
-      // })
-
       if (!this.#runtime.hasStarted) {
         // First message: send the full system prompt (agent prompt + env + instructions)
         const systemPrompt = extractSystemPrompt(options.prompt)
-        this.#logger.warn(`[prompt:first-msg] systemPrompt=${systemPrompt ? `${systemPrompt.length} chars` : "null"} agentPrompt=${agentPrompt ? `${agentPrompt.length} chars (NOT USED on first msg)` : "null"}`)
         if (systemPrompt) {
-          this.#logger.warn(`[prompt:first-msg:content] ${sanitizeSystemPrompt(systemPrompt).slice(0, 300)}...`)
           extraContext.push({
             category: "agent_context",
             content: sanitizeSystemPrompt(systemPrompt),
@@ -225,10 +180,7 @@ export class GitLabDuoAgenticLanguageModel implements LanguageModelV2 {
         // Follow-up message: send agent prompt if available, otherwise fall back
         // to the full system prompt (for agents like 'build' that have no .prompt)
         const promptContent = agentPrompt ?? extractSystemPrompt(options.prompt)
-        const promptSource = agentPrompt ? "agentPrompt" : "systemPrompt-fallback"
-        this.#logger.warn(`[prompt:follow-up] source=${promptSource} content=${promptContent ? `${promptContent.length} chars` : "null"}`)
         if (promptContent) {
-          this.#logger.warn(`[prompt:follow-up:content] ${sanitizeSystemPrompt(promptContent).slice(0, 300)}...`)
           extraContext.push({
             category: "agent_context",
             content: sanitizeSystemPrompt(promptContent),
@@ -249,8 +201,6 @@ export class GitLabDuoAgenticLanguageModel implements LanguageModelV2 {
       const agentReminders = extractAgentReminders(options.prompt)
       if (agentReminders.length > 0) {
         const reminderContent = sanitizeSystemPrompt(agentReminders.join("\n\n"))
-        this.#logger.warn(`[prompt:reminders] ${agentReminders.length} reminder(s), ${reminderContent.length} chars`)
-        this.#logger.warn(`[prompt:reminders:content] ${reminderContent.slice(0, 300)}...`)
         extraContext.push({
           category: "agent_context",
           content: reminderContent,
@@ -274,6 +224,12 @@ export class GitLabDuoAgenticLanguageModel implements LanguageModelV2 {
         extraContext,
       )
       this.#lastSentPrompt = promptText
+
+      // Track input: prompt text + all extra context sent to DWS
+      this.#usageEstimator.addInputChars(promptText!)
+      for (const ctx of extraContext) {
+        if (ctx.content) this.#usageEstimator.addInputChars(ctx.content)
+      }
     }
 
     const iterator = this.#mapEventsToStream(this.#runtime.getEventStream())
@@ -284,21 +240,6 @@ export class GitLabDuoAgenticLanguageModel implements LanguageModelV2 {
     }
   }
 
-  // [DISABLED] Simulated tool queue drain — uncomment to enable
-  // async *#drainSimulatedQueue(): AsyncGenerator<LanguageModelV2StreamPart> {
-  //   const usage: LanguageModelV2Usage = {
-  //     inputTokens: undefined,
-  //     outputTokens: undefined,
-  //     totalTokens: undefined,
-  //   }
-  //   yield { type: "stream-start", warnings: [] }
-  //   const call = this.#simulatedToolQueue.shift()!
-  //   const callId = generateSimulatedToolCallId()
-  //   this.#logger.warn(`simTool (queued): ${call.name} id=${callId} args=${JSON.stringify(call.args).slice(0, 200)}`)
-  //   this.#pendingToolRequests.set(callId, { toolName: call.name })
-  //   yield* this.#emitToolCall(callId, call.name, call.args, usage)
-  // }
-
   // ---------------------------------------------------------------------------
   // Event → stream mapping (2 paths: TEXT_CHUNK + TOOL_REQUEST)
   // ---------------------------------------------------------------------------
@@ -307,23 +248,16 @@ export class GitLabDuoAgenticLanguageModel implements LanguageModelV2 {
     events: AsyncIterable<ReturnType<GitLabAgenticRuntime["getEventStream"]> extends AsyncGenerator<infer T> ? T : never>,
   ): AsyncGenerator<LanguageModelV2StreamPart> {
     const state: StreamState = { textStarted: false }
-    const usage: LanguageModelV2Usage = {
-      inputTokens: undefined,
-      outputTokens: undefined,
-      totalTokens: undefined,
-    }
+    const estimator = this.#usageEstimator
 
     yield { type: "stream-start", warnings: [] }
-
-    // [DISABLED] Buffer text for simulated tool detection at stream end
-    // let textBuffer = ""
 
     try {
       for await (const event of events) {
         if (event.type === "TEXT_CHUNK") {
           if (event.content.length > 0) {
+            estimator.addOutputChars(event.content)
             yield* this.#emitTextDelta(state, event.content)
-            // [DISABLED] textBuffer += event.content
           }
           continue
         }
@@ -337,11 +271,13 @@ export class GitLabDuoAgenticLanguageModel implements LanguageModelV2 {
           let mapped: ReturnType<typeof mapDuoToolRequest>
           try {
             mapped = mapDuoToolRequest(event.toolName, args)
-          } catch (err) {
-            this.#logger.error(`mapDuoToolRequest threw: ${err}`)
+          } catch {
             continue
           }
           const responseType = (event as { responseType?: string }).responseType as "plain" | "http" | undefined
+
+          // Track tool request args as output (generated by the model)
+          estimator.addOutputChars(JSON.stringify(args))
 
           if (Array.isArray(mapped)) {
             // Multi-call expansion (e.g. read_files → N × read)
@@ -351,19 +287,16 @@ export class GitLabDuoAgenticLanguageModel implements LanguageModelV2 {
             for (const subId of subIds) {
               this.#pendingToolRequests.set(subId, { toolName: mapped[0].toolName })
             }
-            this.#logger.warn(`toolRequest (multi): ${event.toolName} -> ${mapped.length}x ${mapped[0].toolName}`)
-            yield* this.#emitMultiToolCalls(subIds, mapped, usage)
+            yield* this.#emitMultiToolCalls(subIds, mapped)
             return
           }
 
-          this.#logger.warn(`toolRequest: ${event.toolName} -> ${mapped.toolName} args=${JSON.stringify(args).slice(0, 200)}`)
           this.#pendingToolRequests.set(event.requestId, { toolName: event.toolName, responseType })
-          yield* this.#emitToolCall(event.requestId, mapped.toolName, mapped.args, usage)
+          yield* this.#emitToolCall(event.requestId, mapped.toolName, mapped.args)
           return
         }
 
         if (event.type === "ERROR") {
-          this.#logger.error(`stream event ERROR: ${event.message}`)
           const msg = event.message
           if (msg.includes("1013") || msg.includes("lock")) {
             yield { type: "error", error: new Error("GitLab Duo workflow is locked (another session may still be active). Please try again in a few seconds.") }
@@ -374,32 +307,24 @@ export class GitLabDuoAgenticLanguageModel implements LanguageModelV2 {
         }
       }
     } catch (streamErr) {
-      this.#logger.error(`stream iteration error: ${streamErr}`)
       yield { type: "error", error: streamErr instanceof Error ? streamErr : new Error(String(streamErr)) }
       return
     }
 
-    // [DISABLED] Stream ended: check buffered text for simulated tool calls
-    // const simCalls = extractSimulatedToolCalls(textBuffer)
-    // if (simCalls.length > 0) {
-    //   this.#logger.warn(`simulated tool calls detected: ${simCalls.length} [${simCalls.map((c) => c.name).join(", ")}]`)
-    //   const first = simCalls[0]
-    //   const callId = generateSimulatedToolCallId()
-    //   this.#logger.warn(`simTool (first): ${first.name} id=${callId} args=${JSON.stringify(first.args).slice(0, 200)}`)
-    //   this.#pendingToolRequests.set(callId, { toolName: first.name })
-    //   for (let i = 1; i < simCalls.length; i++) {
-    //     this.#simulatedToolQueue.push(simCalls[i])
-    //   }
-    //   yield* this.#emitToolCall(callId, first.name, first.args, usage)
-    //   return
-    // }
-
-    yield { type: "finish", finishReason: "stop", usage }
+    yield { type: "finish", finishReason: "stop", usage: this.#currentUsage }
   }
 
   // ---------------------------------------------------------------------------
   // Stream part helpers
   // ---------------------------------------------------------------------------
+
+  get #currentUsage(): LanguageModelV2Usage {
+    return {
+      inputTokens: this.#usageEstimator.inputTokens,
+      outputTokens: this.#usageEstimator.outputTokens,
+      totalTokens: this.#usageEstimator.totalTokens,
+    }
+  }
 
   *#emitTextDelta(state: StreamState, delta: string): Generator<LanguageModelV2StreamPart> {
     if (!state.textStarted) {
@@ -413,20 +338,18 @@ export class GitLabDuoAgenticLanguageModel implements LanguageModelV2 {
     id: string,
     toolName: string,
     args: Record<string, unknown>,
-    usage: LanguageModelV2Usage,
   ): Generator<LanguageModelV2StreamPart> {
     const inputJson = JSON.stringify(args ?? {})
     yield { type: "tool-input-start" as const, id, toolName }
     yield { type: "tool-input-delta" as const, id, delta: inputJson }
     yield { type: "tool-input-end" as const, id }
     yield { type: "tool-call", toolCallId: id, toolName, input: inputJson }
-    yield { type: "finish", finishReason: "tool-calls", usage }
+    yield { type: "finish", finishReason: "tool-calls", usage: this.#currentUsage }
   }
 
   *#emitMultiToolCalls(
     ids: string[],
     calls: MappedToolCall[],
-    usage: LanguageModelV2Usage,
   ): Generator<LanguageModelV2StreamPart> {
     for (let i = 0; i < calls.length; i++) {
       const inputJson = JSON.stringify(calls[i].args ?? {})
@@ -435,6 +358,6 @@ export class GitLabDuoAgenticLanguageModel implements LanguageModelV2 {
       yield { type: "tool-input-end" as const, id: ids[i] }
       yield { type: "tool-call", toolCallId: ids[i], toolName: calls[i].toolName, input: inputJson }
     }
-    yield { type: "finish", finishReason: "tool-calls", usage }
+    yield { type: "finish", finishReason: "tool-calls", usage: this.#currentUsage }
   }
 }

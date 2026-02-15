@@ -9,14 +9,13 @@ import type {
 import { createWorkflow, getWorkflowToken, WorkflowCreateError, type GenerateTokenResponse } from "./workflow_service"
 import { WebSocketWorkflowClient } from "./workflow_client"
 import { WorkflowEventMapper, type AgentEvent } from "./workflow_event_mapper"
-import { createLogger } from "./logger"
 import { getSystemContextItems } from "./system_context"
 import { detectProjectPath, fetchProjectDetailsWithFallback } from "./gitlab_utils"
 import { AsyncQueue } from "./async_queue"
 import { mapWorkflowActionToToolRequest } from "./action_handler"
-import fs from "fs/promises"
-import path from "path"
-import os from "os"
+import fs from "node:fs/promises"
+import path from "node:path"
+import os from "node:os"
 import { ProxyAgent } from "proxy-agent"
 
 type RuntimeEvent = AgentEvent | { type: "TOOL_REQUEST"; requestId: string; toolName: string; args: Record<string, unknown>; responseType?: ToolResponseType }
@@ -26,13 +25,12 @@ type PendingTool = { requestId: string; toolName: string; responseType?: ToolRes
 export class GitLabAgenticRuntime {
   #options: GitLabDuoAgenticProviderOptions
   #selectedModelIdentifier?: string
-  #logger = createLogger()
   #workflowIds = new Map<string, string>()
   #wsClient?: WebSocketWorkflowClient
   #workflowToken?: GenerateTokenResponse
   #queue?: AsyncQueue<RuntimeEvent>
   #stream?: { write: (data: unknown) => boolean; on: (event: string, handler: (...args: any[]) => void) => void }
-  #mapper = new WorkflowEventMapper(createLogger())
+  #mapper = new WorkflowEventMapper()
   #pendingTool?: PendingTool
   #containerParams?: { projectId?: string; namespaceId?: string }
   #sessionId?: string
@@ -107,13 +105,11 @@ export class GitLabAgenticRuntime {
     for (let attempt = 1; attempt <= MAX_LOCK_RETRIES; attempt++) {
       this.#queue = new AsyncQueue<RuntimeEvent>()
       try {
-        this.#logger.warn(`connecting websocket (attempt ${attempt}/${MAX_LOCK_RETRIES})`)
         await this.#connectWebSocket()
         return
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err)
         if ((msg.includes("1013") || msg.includes("lock")) && attempt < MAX_LOCK_RETRIES) {
-          this.#logger.warn(`workflow ${this.#currentWorkflowId} locked, retrying in ${LOCK_RETRY_DELAY_MS}ms (attempt ${attempt}/${MAX_LOCK_RETRIES})`)
           this.#resetStreamState()
           await new Promise((resolve) => setTimeout(resolve, LOCK_RETRY_DELAY_MS))
           const retryToken = await getWorkflowToken(this.#options.instanceUrl, this.#options.apiKey, workflowType)
@@ -121,10 +117,8 @@ export class GitLabAgenticRuntime {
           continue
         }
         if (msg.includes("1013") || msg.includes("lock")) {
-          this.#logger.error(`workflow ${this.#currentWorkflowId} still locked after ${MAX_LOCK_RETRIES} attempts`)
           throw new Error("GitLab Duo workflow is locked (another session may still be active). Please try again in a few seconds.")
         }
-        this.#logger.error(`websocket connection failed: ${msg}`)
         throw new Error(`GitLab Duo connection failed: ${msg}`)
       }
     }
@@ -147,14 +141,6 @@ export class GitLabAgenticRuntime {
         ? []
         : getSystemContextItems(this.#options.systemRules)
     additionalContext.push(...extraContext)
-    const agentCtx = additionalContext.filter((c) => c.category === "agent_context")
-    if (agentCtx.length > 0) {
-      for (const ctx of agentCtx) {
-        this.#logger.warn(`[sendStartRequest:agent-prompt] contentLen=${ctx.content?.length ?? 0} ${ctx.content?.slice(0, 500)}...`)
-      }
-    } else {
-      this.#logger.warn(`[sendStartRequest] WARNING: no agent_context item in additional_context!`)
-    }
     const startRequest: ClientEvent = {
       startRequest: {
         workflowID: this.#currentWorkflowId!,
@@ -181,7 +167,6 @@ export class GitLabAgenticRuntime {
 
   sendToolResponse(requestId: string, response: { output: string; error?: string }, responseType?: ToolResponseType): void {
     if (!this.#stream) throw new Error("Workflow client not initialized")
-    this.#logger.warn(`toolResponse: requestId=${requestId} type=${responseType ?? "plain"} error=${!!response.error} outputLen=${response.output?.length ?? 0}`)
 
     if (responseType === "http") {
       const parsed = parseHttpToolOutput(response.output)
@@ -216,8 +201,6 @@ export class GitLabAgenticRuntime {
     if (!this.#queue) throw new Error("Workflow stream not initialized")
     return this.#queue.iterate()
   }
-
-
 
   // ---------------------------------------------------------------------------
   // Private: project / workflow resolution
@@ -265,8 +248,6 @@ export class GitLabAgenticRuntime {
       await this.#persistWorkflowId()
       return workflowId
     } catch (error) {
-      const errMsg = error instanceof Error ? error.message : String(error)
-      this.#logger.error(`workflow creation failed: ${errMsg}`)
       if (
         error instanceof WorkflowCreateError &&
         error.status === 400 &&
@@ -310,7 +291,6 @@ export class GitLabAgenticRuntime {
       // --- Tool requests (delegated to action_handler) ---
       const toolRequest = mapWorkflowActionToToolRequest(action)
       if (toolRequest) {
-        this.#logger.warn(`ws ${toolRequest.toolName}: requestID=${toolRequest.requestId} args=${JSON.stringify(toolRequest.args).slice(0, 200)}`)
         this.#pendingTool = {
           requestId: toolRequest.requestId,
           toolName: toolRequest.toolName,
@@ -323,8 +303,6 @@ export class GitLabAgenticRuntime {
         return
       }
 
-      const actionKey = Object.keys(action).find((k) => k !== "requestID" && (action as Record<string, unknown>)[k])
-      this.#logger.warn(`ws action (unhandled): ${actionKey ?? "unknown"}`)
     }
 
     if ("on" in (stream as any)) {
@@ -332,7 +310,6 @@ export class GitLabAgenticRuntime {
         handleAction(action)
       })
       ;(stream as any).on("error", (err: Error) => {
-        this.#logger.warn(`stream error: ${err.message}`)
         queue.push({ type: "ERROR", message: err.message, timestamp: Date.now() })
         queue.close()
         this.#resetStreamState()
@@ -348,7 +325,7 @@ export class GitLabAgenticRuntime {
     if (!this.#queue) return
     if (!this.#workflowToken) throw new Error("Workflow token unavailable")
 
-    this.#wsClient = new WebSocketWorkflowClient(createLogger(), {
+    this.#wsClient = new WebSocketWorkflowClient({
       gitlabInstanceUrl: new URL(this.#options.instanceUrl),
       token: this.#options.apiKey,
       headers: buildWorkflowHeaders(

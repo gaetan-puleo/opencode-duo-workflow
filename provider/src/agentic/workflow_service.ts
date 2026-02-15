@@ -1,4 +1,5 @@
 import type { WorkflowType } from "./types"
+import { buildApiUrl, buildAuthHeaders } from "./gitlab_utils"
 
 export type GenerateTokenResponse = {
   gitlab_rails: {
@@ -35,11 +36,6 @@ export class WorkflowCreateError extends Error {
   }
 }
 
-function buildApiUrl(instanceUrl: string, path: string): string {
-  const base = instanceUrl.endsWith("/") ? instanceUrl : `${instanceUrl}/`
-  return new URL(path.replace(/^\//, ""), base).toString()
-}
-
 export async function createWorkflow(
   instanceUrl: string,
   apiKey: string,
@@ -52,7 +48,7 @@ export async function createWorkflow(
     method: "POST",
     headers: {
       "content-type": "application/json",
-      authorization: `Bearer ${apiKey}`,
+      ...buildAuthHeaders(apiKey),
     },
     body: JSON.stringify({
       project_id: containerParams?.projectId,
@@ -86,7 +82,7 @@ export async function getWorkflowToken(
     method: "POST",
     headers: {
       "content-type": "application/json",
-      authorization: `Bearer ${apiKey}`,
+      ...buildAuthHeaders(apiKey),
     },
     body: JSON.stringify({ workflow_definition: workflowDefinition }),
   })

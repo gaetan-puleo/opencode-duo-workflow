@@ -9,5 +9,5 @@
     "types": ["bun-types"],
     "resolveJsonModule": true
   },
-  "include": ["src/**/*.ts"]
+  "include": ["src/**/*.ts", "../scripts/**/*.ts", "../shared/**/*.ts"]
 }

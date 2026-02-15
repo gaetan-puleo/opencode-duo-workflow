@@ -9,7 +9,7 @@ import { pathToFileURL } from "node:url"
 import { resolveProviderPath } from "./resolve_provider"
 import { loadGitLabModels } from "./models"
 
-const PROVIDER_ID = "gitlab-duo-agentic-unofficial"
+const PROVIDER_ID = "gitlab-duo-agentic"
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export async function configHook(input: Record<string, any>): Promise<void> {
@@ -35,7 +35,7 @@ export async function configHook(input: Record<string, any>): Promise<void> {
   }
 
   input.provider[PROVIDER_ID] = {
-    name: existing?.name ?? "GitLab Duo Agentic (Unofficial)",
+    name: existing?.name ?? "GitLab Duo Agentic",
     npm: existing?.npm ?? pathToFileURL(providerPath).href,
     options: {
       instanceUrl,

@@ -13,10 +13,10 @@ ls -a ./provider/node_modules
 ls -a ~/.config/opencode/plugins
 
 # List available models for the provider
-opencode models gitlab-duo-agentic-unofficial --print-logs --log-level DEBUG
+opencode models gitlab-duo-agentic --print-logs --log-level DEBUG
 
 # Run a quick test prompt
-opencode run --print-logs --log-level DEBUG -m gitlab-duo-agentic-unofficial/duo-agentic "hello"
+opencode run --print-logs --log-level DEBUG -m gitlab-duo-agentic/duo-agentic "hello"
 ```
 
 ## Tool call formats (SHOULD use)

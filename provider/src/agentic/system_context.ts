@@ -1,4 +1,4 @@
-import os from "os"
+import os from "node:os"
 import type { AIContextItem } from "./types"
 
 export function getSystemContextItems(systemRules?: string): AIContextItem[] {

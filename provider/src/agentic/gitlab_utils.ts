@@ -1,5 +1,5 @@
-import fs from "fs/promises"
-import path from "path"
+import fs from "node:fs/promises"
+import path from "node:path"
 
 // ---------------------------------------------------------------------------
 // Git remote detection
@@ -103,6 +103,19 @@ function stripGitSuffix(pathname: string): string {
 }
 
 // ---------------------------------------------------------------------------
+// URL helpers
+// ---------------------------------------------------------------------------
+
+export function buildApiUrl(instanceUrl: string, apiPath: string): string {
+  const base = instanceUrl.endsWith("/") ? instanceUrl : `${instanceUrl}/`
+  return new URL(apiPath.replace(/^\//, ""), base).toString()
+}
+
+export function buildAuthHeaders(apiKey: string): Record<string, string> {
+  return { authorization: `Bearer ${apiKey}` }
+}
+
+// ---------------------------------------------------------------------------
 // GitLab project API
 // ---------------------------------------------------------------------------
 
@@ -111,10 +124,9 @@ async function fetchProjectDetails(
   apiKey: string,
   projectPath: string,
 ): Promise<{ projectId?: string; namespaceId?: string }> {
-  const base = instanceUrl.endsWith("/") ? instanceUrl : `${instanceUrl}/`
-  const url = new URL(`api/v4/projects/${encodeURIComponent(projectPath)}`, base)
-  const response = await fetch(url.toString(), {
-    headers: { authorization: `Bearer ${apiKey}` },
+  const url = buildApiUrl(instanceUrl, `api/v4/projects/${encodeURIComponent(projectPath)}`)
+  const response = await fetch(url, {
+    headers: buildAuthHeaders(apiKey),
   })
   if (!response.ok) {
     throw new Error(`Failed to fetch project details: ${response.status}`)
@@ -145,14 +157,13 @@ export async function fetchProjectDetailsWithFallback(
 
   try {
     const name = projectPath.split("/").pop() || projectPath
-    const base = instanceUrl.endsWith("/") ? instanceUrl : `${instanceUrl}/`
-    const url = new URL(`api/v4/projects`, base)
-    url.searchParams.set("search", name)
-    url.searchParams.set("simple", "true")
-    url.searchParams.set("per_page", "100")
-    url.searchParams.set("membership", "true")
-    const response = await fetch(url.toString(), {
-      headers: { authorization: `Bearer ${apiKey}` },
+    const searchUrl = new URL(buildApiUrl(instanceUrl, "api/v4/projects"))
+    searchUrl.searchParams.set("search", name)
+    searchUrl.searchParams.set("simple", "true")
+    searchUrl.searchParams.set("per_page", "100")
+    searchUrl.searchParams.set("membership", "true")
+    const response = await fetch(searchUrl.toString(), {
+      headers: buildAuthHeaders(apiKey),
     })
     if (!response.ok) {
       throw new Error(`Failed to search projects: ${response.status}`)
@@ -217,14 +228,13 @@ export async function resolveRootNamespaceId(
   apiKey: string,
   namespaceId: string,
 ): Promise<string> {
-  const base = instanceUrl.endsWith("/") ? instanceUrl : `${instanceUrl}/`
   let currentId = namespaceId
 
   // Walk up the namespace hierarchy (max 20 levels to prevent infinite loops)
   for (let depth = 0; depth < 20; depth++) {
-    const url = new URL(`api/v4/namespaces/${currentId}`, base)
-    const response = await fetch(url.toString(), {
-      headers: { authorization: `Bearer ${apiKey}` },
+    const url = buildApiUrl(instanceUrl, `api/v4/namespaces/${currentId}`)
+    const response = await fetch(url, {
+      headers: buildAuthHeaders(apiKey),
     })
 
     if (!response.ok) {

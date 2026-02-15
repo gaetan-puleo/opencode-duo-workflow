@@ -14,8 +14,8 @@
  * endpoint. Results are written to models.json in the project root.
  */
 
-import path from "path"
-import fs from "fs/promises"
+import path from "node:path"
+import fs from "node:fs/promises"
 import { fileURLToPath } from "node:url"
 import {
   detectProjectPath,
@@ -217,8 +217,8 @@ async function main(): Promise<void> {
   const opencodeConfig = {
     $schema: "https://opencode.ai/config.json",
     provider: {
-      "gitlab-duo-agentic-unofficial": {
-        name: "GitLab Duo Agentic (Unofficial)",
+      "gitlab-duo-agentic": {
+        name: "GitLab Duo Agentic",
         npm: "file:///path/to/opencode-gitlab-duo-workflow/provider",
         options: {
           instanceUrl,
@@ -230,7 +230,7 @@ async function main(): Promise<void> {
         models,
       },
     },
-    model: `gitlab-duo-agentic-unofficial/${defaultModelRef}`,
+    model: `gitlab-duo-agentic/${defaultModelRef}`,
   }
 
   // 11. Output

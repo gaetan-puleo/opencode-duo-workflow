@@ -4,6 +4,9 @@
   "private": true,
   "type": "module",
   "main": "./src/index.ts",
+  "scripts": {
+    "typecheck": "bun x tsc --noEmit"
+  },
   "dependencies": {
     "@ai-sdk/provider": "2.0.1",
     "isomorphic-ws": "^5.0.0",
@@ -11,5 +14,8 @@
     "proxy-agent": "^6.5.0",
     "uuid": "^11.0.5",
     "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "bun-types": "^1.2.0"
   }
 }

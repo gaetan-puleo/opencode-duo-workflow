@@ -2,7 +2,7 @@ import type { ProviderV2 } from "@ai-sdk/provider"
 import type { GitLabDuoAgenticProviderOptions } from "./agentic/types"
 import { GitLabDuoAgenticLanguageModel } from "./agentic/model"
 import { GitLabAgenticRuntime } from "./agentic/runtime"
-import { createRequire } from "module"
+import { createRequire } from "node:module"
 
 const REQUIRED_MODULES = [
   "isomorphic-ws",
@@ -25,12 +25,11 @@ function assertDependencies(): void {
   }
 
   if (missing.length > 0) {
-    const message =
+    throw new Error(
       "Missing provider dependencies: " +
       missing.join(", ") +
-      ". Run `bun install` in the provider directory."
-    console.error(message)
-    throw new Error(message)
+      ". Run `bun install` in the provider directory.",
+    )
   }
 }
 
@@ -38,9 +37,7 @@ function assertInstanceUrl(value: string): void {
   try {
     new URL(value)
   } catch {
-    const message = `Invalid instanceUrl: "${value}"`
-    console.error(message)
-    throw new Error(message)
+    throw new Error(`Invalid instanceUrl: "${value}"`)
   }
 }
 

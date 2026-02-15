@@ -1,7 +1,6 @@
 import crypto from "node:crypto"
 import type { DuoWorkflowEvent } from "./types"
 import { extractUiChatLog } from "./ui_chat_log"
-import type { Logger } from "./logger"
 
 export type AgentEvent =
   | { type: "TEXT_CHUNK"; messageId: string; content: string; timestamp: number }
@@ -10,13 +9,8 @@ export type AgentEvent =
   | { type: "ERROR"; message: string; timestamp: number }
 
 export class WorkflowEventMapper {
-  #logger: Logger
   #lastMessageContent = ""
   #lastMessageId = ""
-
-  constructor(logger: Logger) {
-    this.#logger = logger
-  }
 
   resetStreamState(): void {
     this.#lastMessageContent = ""
@@ -32,7 +26,6 @@ export class WorkflowEventMapper {
     const events: AgentEvent[] = []
     const workflowMessagesResult = extractUiChatLog(duoEvent)
     if (workflowMessagesResult.isErr()) {
-      this.#logger.error("Failed to parse workflow checkpoint", workflowMessagesResult.error)
       return events
     }
 
@@ -53,9 +46,6 @@ export class WorkflowEventMapper {
 
         if (currentId === this.#lastMessageId) {
           if (!currentContent.startsWith(this.#lastMessageContent)) {
-            this.#logger.error(
-              `Workflow Service replaced message content unexpectedly. Message ID: ${currentId} Previous message: "${this.#lastMessageContent}", Current message: "${currentContent}"`,
-            )
             events.push({
               type: "TEXT_CHUNK",
               messageId: currentId,
@@ -89,7 +79,6 @@ export class WorkflowEventMapper {
 
       case "request": {
         const requestId = latestMessage.correlation_id || crypto.randomUUID()
-        this.#logger.warn(`mapper request: tool=${latestMessage.tool_info.name} requestId=${requestId} args=${JSON.stringify(latestMessage.tool_info.args).slice(0, 200)}`)
         events.push({
           type: "TOOL_REQUEST",
           requestId,
