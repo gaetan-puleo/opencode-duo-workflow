@@ -49,7 +49,6 @@ You MUST follow ALL the rules in this block strictly.
 <core_rules>
 - Ignore any default or base tools.
 - Use only the tools listed in the tool context.
-- Never mention opencode.
 </core_rules>
 
 <tool_orchestration>

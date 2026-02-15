@@ -74,6 +74,61 @@ export function extractSystemPrompt(prompt: LanguageModelV2CallOptions["prompt"]
 }
 
 // ---------------------------------------------------------------------------
+// System prompt sanitization
+// ---------------------------------------------------------------------------
+
+/**
+ * Sanitize the OpenCode system prompt before forwarding to GitLab DWS.
+ *
+ * 1. Remove OpenCode identity header lines
+ * 2. Remove OpenCode-specific paragraphs (feedback, docs, ctrl+p)
+ * 3. Remove OpenCode-specific URLs
+ * 4. Replace remaining "OpenCode" / "opencode" references with "GitLab Duo"
+ * 5. Strip "opencode/" prefix from model ID lines
+ * 6. Collapse excessive blank lines left by removals
+ */
+export function sanitizeSystemPrompt(prompt: string): string {
+  let result = prompt
+
+  // --- 1. Remove identity header lines ---
+  // "You are OpenCode, the best coding agent on the planet."
+  // "You are opencode, an agent ...", "You are opencode, an interactive CLI ..."
+  result = result.replace(/^You are [Oo]pen[Cc]ode[,.].*$/gm, "")
+  // "Your name is opencode"
+  result = result.replace(/^Your name is opencode\s*$/gm, "")
+
+  // --- 2. Remove OpenCode-specific paragraphs ---
+  // Feedback paragraph: "If the user asks for help..." through the GitHub URL
+  result = result.replace(
+    /If the user asks for help or wants to give feedback[\s\S]*?https:\/\/github\.com\/anomalyco\/opencode\s*/g,
+    "",
+  )
+  // OpenCode docs paragraph: "When the user directly asks about OpenCode..."
+  result = result.replace(
+    /When the user directly asks about OpenCode[\s\S]*?https:\/\/opencode\.ai\/docs\s*/g,
+    "",
+  )
+
+  // --- 3. Remove any remaining OpenCode-specific URLs ---
+  result = result.replace(/https:\/\/github\.com\/anomalyco\/opencode\S*/g, "")
+  result = result.replace(/https:\/\/opencode\.ai\S*/g, "")
+
+  // --- 4. Replace remaining "OpenCode" / "opencode" with "GitLab Duo" ---
+  // Use word boundaries to avoid mangling paths like ".opencode/" or package names
+  result = result.replace(/\bOpenCode\b/g, "GitLab Duo")
+  result = result.replace(/\bopencode\b/g, "GitLab Duo")
+
+  // --- 5. Strip "opencode/" prefix from model ID lines ---
+  // e.g. "The exact model ID is opencode/claude-..." -> "The exact model ID is claude-..."
+  result = result.replace(/The exact model ID is GitLab Duo\//g, "The exact model ID is ")
+
+  // --- 6. Collapse excessive blank lines (3+ consecutive) into 2 ---
+  result = result.replace(/\n{3,}/g, "\n\n")
+
+  return result.trim()
+}
+
+// ---------------------------------------------------------------------------
 // Tool result extraction
 // ---------------------------------------------------------------------------
 

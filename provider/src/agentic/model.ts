@@ -10,7 +10,7 @@ import type { GitLabDuoAgenticProviderOptions, AIContextItem, WorkflowType } fro
 import { GitLabAgenticRuntime } from "./runtime"
 import { asyncIteratorToReadableStream } from "./stream_adapter"
 import { createLogger } from "./logger"
-import { extractLastUserText, extractSystemPrompt, extractToolResults } from "./prompt_utils"
+import { extractLastUserText, extractSystemPrompt, extractToolResults, sanitizeSystemPrompt } from "./prompt_utils"
 import { buildMcpTools, buildToolContext, mapDuoToolRequest, type MappedToolCall } from "./tool_mapping"
 // [DISABLED] Simulated tool calls for todowrite/todoread/task — uncomment to enable
 // import {
@@ -204,10 +204,10 @@ export class GitLabDuoAgenticLanguageModel implements LanguageModelV2 {
         if (systemPrompt) {
           extraContext.push({
             category: "agent_context",
-            content: systemPrompt,
-            id: "opencode_system_prompt",
+            content: sanitizeSystemPrompt(systemPrompt),
+            id: "agent_system_prompt",
             metadata: {
-              title: "OpenCode System Prompt",
+              title: "Agent System Prompt",
               enabled: true,
               subType: "system_prompt",
               icon: "file-text",
@@ -223,10 +223,10 @@ export class GitLabDuoAgenticLanguageModel implements LanguageModelV2 {
         if (promptContent) {
           extraContext.push({
             category: "agent_context",
-            content: promptContent,
-            id: "opencode_system_prompt",
+            content: sanitizeSystemPrompt(promptContent),
+            id: "agent_system_prompt",
             metadata: {
-              title: "OpenCode System Prompt",
+              title: "Agent System Prompt",
               enabled: true,
               subType: "system_prompt",
               icon: "file-text",
