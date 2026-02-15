@@ -179,6 +179,9 @@ export class GitLabDuoAgenticLanguageModel implements LanguageModelV2 {
     // }
 
     // --- Send startRequest for new user messages ---
+    if (sentToolResults || !isNewUserMessage) {
+      this.#logger.warn(`[prompt:skipped] sentToolResults=${sentToolResults} isNewUserMessage=${isNewUserMessage} — no agent prompt sent this turn`)
+    }
     if (!sentToolResults && isNewUserMessage) {
       const extraContext: AIContextItem[] = []
       if (toolContext) extraContext.push(toolContext)
@@ -201,7 +204,9 @@ export class GitLabDuoAgenticLanguageModel implements LanguageModelV2 {
       if (!this.#runtime.hasStarted) {
         // First message: send the full system prompt (agent prompt + env + instructions)
         const systemPrompt = extractSystemPrompt(options.prompt)
+        this.#logger.warn(`[prompt:first-msg] systemPrompt=${systemPrompt ? `${systemPrompt.length} chars` : "null"} agentPrompt=${agentPrompt ? `${agentPrompt.length} chars (NOT USED on first msg)` : "null"}`)
         if (systemPrompt) {
+          this.#logger.warn(`[prompt:first-msg:content] ${sanitizeSystemPrompt(systemPrompt).slice(0, 300)}...`)
           extraContext.push({
             category: "agent_context",
             content: sanitizeSystemPrompt(systemPrompt),
@@ -220,7 +225,10 @@ export class GitLabDuoAgenticLanguageModel implements LanguageModelV2 {
         // Follow-up message: send agent prompt if available, otherwise fall back
         // to the full system prompt (for agents like 'build' that have no .prompt)
         const promptContent = agentPrompt ?? extractSystemPrompt(options.prompt)
+        const promptSource = agentPrompt ? "agentPrompt" : "systemPrompt-fallback"
+        this.#logger.warn(`[prompt:follow-up] source=${promptSource} content=${promptContent ? `${promptContent.length} chars` : "null"}`)
         if (promptContent) {
+          this.#logger.warn(`[prompt:follow-up:content] ${sanitizeSystemPrompt(promptContent).slice(0, 300)}...`)
           extraContext.push({
             category: "agent_context",
             content: sanitizeSystemPrompt(promptContent),

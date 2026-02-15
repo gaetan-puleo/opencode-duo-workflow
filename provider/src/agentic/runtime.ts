@@ -147,6 +147,17 @@ export class GitLabAgenticRuntime {
         ? []
         : getSystemContextItems(this.#options.systemRules)
     additionalContext.push(...extraContext)
+    const agentCtx = additionalContext.filter((c) => c.category === "agent_context")
+    for (const ctx of additionalContext) {
+      this.#logger.warn(`[sendStartRequest] context: category=${ctx.category} id=${ctx.id ?? "n/a"} contentLen=${ctx.content?.length ?? 0}`)
+    }
+    if (agentCtx.length > 0) {
+      for (const ctx of agentCtx) {
+        this.#logger.warn(`[sendStartRequest:agent-prompt] ${ctx.content?.slice(0, 500)}...`)
+      }
+    } else {
+      this.#logger.warn(`[sendStartRequest] WARNING: no agent_context item in additional_context!`)
+    }
     const startRequest: ClientEvent = {
       startRequest: {
         workflowID: this.#currentWorkflowId!,
