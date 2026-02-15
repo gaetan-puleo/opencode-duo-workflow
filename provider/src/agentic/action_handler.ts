@@ -6,6 +6,10 @@
 
 import type { WorkflowAction, ToolResponseType } from "./types"
 
+function shellQuote(value: string): string {
+  return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`
+}
+
 type ToolRequestAction = {
   requestId: string
   toolName: string
@@ -121,8 +125,8 @@ export function mapWorkflowActionToToolRequest(action: WorkflowAction): ToolRequ
 
   if (action.runCommand) {
     const parts = [action.runCommand.program]
-    if (action.runCommand.flags) parts.push(...action.runCommand.flags)
-    if (action.runCommand.arguments) parts.push(...action.runCommand.arguments)
+    if (action.runCommand.flags) parts.push(...action.runCommand.flags.map(shellQuote))
+    if (action.runCommand.arguments) parts.push(...action.runCommand.arguments.map(shellQuote))
     return {
       requestId,
       toolName: "shell_command",

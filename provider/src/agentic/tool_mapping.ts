@@ -109,9 +109,9 @@ export function mapDuoToolRequest(
       if (program) {
         const parts = [program]
         const flags = args.flags
-        if (Array.isArray(flags)) parts.push(...flags.map((f) => String(f)))
+        if (Array.isArray(flags)) parts.push(...flags.map((f) => shellQuote(String(f))))
         const cmdArgs = args.arguments
-        if (Array.isArray(cmdArgs)) parts.push(...cmdArgs.map((a) => String(a)))
+        if (Array.isArray(cmdArgs)) parts.push(...cmdArgs.map((a) => shellQuote(String(a))))
         return {
           toolName: "bash",
           args: { command: parts.join(" "), description: "Run command", workdir: "." },
@@ -128,7 +128,9 @@ export function mapDuoToolRequest(
       const command = asString(args.command)
       if (!command) return { toolName, args }
       const extraArgs = asString(args.args)
-      const gitCommand = ["git", command, extraArgs].filter(Boolean).join(" ")
+      const gitCommand = ["git", shellQuote(command), extraArgs ? shellQuote(extraArgs) : ""]
+        .filter(Boolean)
+        .join(" ")
       return {
         toolName: "bash",
         args: { command: gitCommand, description: "Run git command", workdir: "." },
