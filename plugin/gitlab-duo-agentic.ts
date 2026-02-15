@@ -2,13 +2,14 @@
  * OpenCode plugin entry point for GitLab Duo Agentic.
  *
  * This file is the module that OpenCode discovers and loads — it composes
- * the config hook, chat-params hook, and tool definitions from their
- * respective modules.
+ * the config hook and chat-params hook.
+ *
+ * Custom read tools have been removed: OpenCode's native `read` tool is
+ * now forwarded directly to the Duo Workflow Service as an MCP tool.
  */
 
 import type { Plugin } from "@opencode-ai/plugin"
 import { configHook } from "./config"
-import { createReadTools } from "./tools"
 
 export const GitLabDuoAgenticPlugin: Plugin = async () => {
   return {
@@ -25,6 +26,5 @@ export const GitLabDuoAgenticPlugin: Plugin = async () => {
       }
       return output
     },
-    tool: createReadTools(),
   }
 }

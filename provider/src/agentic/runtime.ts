@@ -289,17 +289,20 @@ export class GitLabAgenticRuntime {
       }
 
       // --- Tool requests (delegated to action_handler) ---
-      const toolRequest = mapWorkflowActionToToolRequest(action)
-      if (toolRequest) {
-        this.#pendingTool = {
-          requestId: toolRequest.requestId,
-          toolName: toolRequest.toolName,
-          responseType: toolRequest.responseType,
+      const result = mapWorkflowActionToToolRequest(action)
+      if (result) {
+        const requests = Array.isArray(result) ? result : [result]
+        for (const req of requests) {
+          this.#pendingTool = {
+            requestId: req.requestId,
+            toolName: req.toolName,
+            responseType: req.responseType,
+          }
+          queue.push({
+            type: "TOOL_REQUEST",
+            ...req,
+          })
         }
-        queue.push({
-          type: "TOOL_REQUEST",
-          ...toolRequest,
-        })
         return
       }
 
