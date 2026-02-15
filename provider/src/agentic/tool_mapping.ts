@@ -352,9 +352,9 @@ export function buildToolContext(
   return {
     category: "tool_information",
     content,
-    id: "opencode_tools",
+    id: "available_tools",
     metadata: {
-      title: "OpenCode Tools",
+      title: "Available Tools",
       enabled: true,
       subType: "tools",
       icon: "tool",
