@@ -1,0 +1,31 @@
+node_modules
+
+# Build output
+dist/
+
+# Generated files
+models.json
+
+# Local config (contains machine-specific paths)
+opencode-config.js
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Local AI workspace
+.ai/

@@ -1,0 +1,53 @@
+{
+  "name": "opencode-gitlab-duo-agentic",
+  "version": "0.2.22",
+  "description": "OpenCode plugin and provider for GitLab Duo Agentic workflows",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit",
+    "pack:check": "npm pack --dry-run",
+    "prepack": "npm run build"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "bun": ">=1.2.0",
+    "node": ">=18.0.0",
+    "npm": ">=9.0.0"
+  },
+  "keywords": [
+    "opencode",
+    "plugin",
+    "provider",
+    "gitlab",
+    "duo",
+    "agentic"
+  ],
+  "dependencies": {
+    "@ai-sdk/provider": "2.0.1",
+    "@opencode-ai/plugin": "^1.2.6",
+    "isomorphic-ws": "^5.0.0",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/node": "^24.3.0",
+    "tsup": "^8.5.0",
+    "typescript": "^5.9.2"
+  }
+}
