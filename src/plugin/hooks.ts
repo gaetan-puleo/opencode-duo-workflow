@@ -1,9 +1,30 @@
-import type { Hooks, PluginInput } from "@opencode-ai/plugin"
+import { tool, type Hooks, type PluginInput } from "@opencode-ai/plugin"
 import { applyRuntimeConfig } from "./config"
 
 export async function createPluginHooks(input: PluginInput): Promise<Hooks> {
 
   return {
+    tool: {
+      todoread: tool({
+        description: "Use this tool to read your todo list",
+        args: {},
+        async execute(_args, ctx) {
+          await ctx.ask({
+            permission: "todoread",
+            patterns: ["*"],
+            always: ["*"],
+            metadata: {},
+          })
+
+          const response = await input.client.session.todo({
+            path: { id: ctx.sessionID },
+            throwOnError: true,
+          })
+          const payload = response.data ?? []
+          return JSON.stringify(payload, null, 2)
+        },
+      }),
+    },
     config: async (config) => applyRuntimeConfig(config, input.directory),
     "chat.message": async ({ sessionID }, { parts }) => {
       const text = parts
@@ -47,8 +68,7 @@ function isUtilityAgent(agent: string | { name: string }): boolean {
 }
 
 function isGitLabProvider(model: { providerID: string; api?: { npm?: string } }): boolean {
-  if (model.api?.npm === "opencode-gitlab-duo-agentic") return true
-  if (model.api?.npm === "opencode-gitlab-duo-agentic") return true
+  if (model.api?.npm === "opencode-gitlab-duo-agentic-custom-tools") return true
   if (model.providerID === "gitlab" && model.api?.npm !== "@gitlab/gitlab-ai-provider") return true
   return model.providerID.toLowerCase().includes("gitlab-duo")
 }

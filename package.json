@@ -1,6 +1,6 @@
 {
-  "name": "opencode-gitlab-duo-agentic",
-  "version": "0.3.0",
+  "name": "opencode-gitlab-duo-agentic-custom-tools",
+  "version": "0.3.5",
   "description": "OpenCode plugin and provider for GitLab Duo Agentic workflows",
   "license": "MIT",
   "type": "module",

@@ -8,6 +8,11 @@ const SUPPORTED_TOOLS = new Set([
   "write",
   "glob",
   "grep",
+  "webfetch",
+  "question",
+  "skill",
+  "todowrite",
+  "todoread",
 ])
 
 type ToolListItem = {
@@ -124,6 +129,108 @@ export function buildFallbackTools(): McpToolDefinition[] {
           include: { type: "string", description: "File pattern to include in the search (e.g. '*.js', '*.{ts,tsx}')" },
         },
         required: ["pattern"],
+      }),
+    },
+    {
+      name: "webfetch",
+      description: "Fetches content from a specified URL and returns it as markdown, text, or HTML.",
+      inputSchema: JSON.stringify({
+        type: "object",
+        properties: {
+          url: { type: "string", description: "The URL to fetch content from" },
+          format: {
+            type: "string",
+            enum: ["text", "markdown", "html"],
+            description: "The format to return the content in (defaults to markdown)",
+          },
+          timeout: { type: "number", description: "Optional timeout in seconds (max 120)" },
+        },
+        required: ["url"],
+      }),
+    },
+    {
+      name: "question",
+      description: "Ask the user clarifying questions and receive structured answers.",
+      inputSchema: JSON.stringify({
+        type: "object",
+        properties: {
+          questions: {
+            type: "array",
+            description: "Questions to ask",
+            items: {
+              type: "object",
+              properties: {
+                question: { type: "string", description: "Complete question" },
+                header: { type: "string", description: "Very short label (max 30 chars)" },
+                options: {
+                  type: "array",
+                  description: "Available choices",
+                  items: {
+                    type: "object",
+                    properties: {
+                      label: { type: "string", description: "Display text (1-5 words, concise)" },
+                      description: { type: "string", description: "Explanation of choice" },
+                    },
+                    required: ["label", "description"],
+                  },
+                },
+                multiple: { type: "boolean", description: "Allow selecting multiple choices" },
+              },
+              required: ["question", "header", "options"],
+            },
+          },
+        },
+        required: ["questions"],
+      }),
+    },
+    {
+      name: "skill",
+      description: "Load a specialized skill by name.",
+      inputSchema: JSON.stringify({
+        type: "object",
+        properties: {
+          name: { type: "string", description: "The skill name from available_skills" },
+        },
+        required: ["name"],
+      }),
+    },
+    {
+      name: "todowrite",
+      description: "Create and update the structured todo list for the current session.",
+      inputSchema: JSON.stringify({
+        type: "object",
+        properties: {
+          todos: {
+            type: "array",
+            description: "The updated todo list",
+            items: {
+              type: "object",
+              properties: {
+                content: { type: "string", description: "Brief description of the task" },
+                status: {
+                  type: "string",
+                  enum: ["pending", "in_progress", "completed", "cancelled"],
+                  description: "Current status of the task",
+                },
+                priority: {
+                  type: "string",
+                  enum: ["high", "medium", "low"],
+                  description: "Priority level of the task",
+                },
+              },
+              required: ["content", "status", "priority"],
+            },
+          },
+        },
+        required: ["todos"],
+      }),
+    },
+    {
+      name: "todoread",
+      description: "Read the current session todo list.",
+      inputSchema: JSON.stringify({
+        type: "object",
+        properties: {},
       }),
     },
   ]
