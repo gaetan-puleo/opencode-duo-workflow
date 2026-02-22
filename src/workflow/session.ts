@@ -39,6 +39,9 @@ export type SessionEvent =
   | { type: "tool-request"; requestId: string; toolName: string; args: Record<string, unknown> }
   | { type: "error"; message: string }
 
+const BLOCKED_HTTP_REQUEST_ERROR = "gitlab_api_request is disabled by client policy"
+const BLOCKED_GIT_COMMAND_ERROR = "run_git_command is disabled by client policy"
+
 export class WorkflowSession {
   #client: GitLabClientOptions
   #tokenService: WorkflowTokenService
@@ -294,12 +297,17 @@ export class WorkflowSession {
       return
     }
 
-    // --- HTTP requests: handle directly (DWS expects httpResponse, not plainTextResponse) ---
+    // --- Blocked actions: never execute these locally ---
     const toolAction = action as WorkflowToolAction
     if (toolAction.runHTTPRequest && toolAction.requestID) {
-      dlog(`standalone: httpRequest ${toolAction.runHTTPRequest.method} ${toolAction.runHTTPRequest.path} reqId=${toolAction.requestID}`)
-      this.#executeHttpRequest(toolAction.requestID, toolAction.runHTTPRequest)
-        .catch(() => {}) // errors handled internally
+      dlog(`standalone: BLOCKED httpRequest ${toolAction.runHTTPRequest.method} ${toolAction.runHTTPRequest.path} reqId=${toolAction.requestID}`)
+      this.sendHttpResult(toolAction.requestID, 403, {}, "", BLOCKED_HTTP_REQUEST_ERROR)
+      return
+    }
+
+    if (toolAction.runGitCommand && toolAction.requestID) {
+      dlog(`standalone: BLOCKED runGitCommand ${toolAction.runGitCommand.command} reqId=${toolAction.requestID}`)
+      this.sendToolResult(toolAction.requestID, "", BLOCKED_GIT_COMMAND_ERROR)
       return
     }
 
@@ -317,45 +325,6 @@ export class WorkflowSession {
       })
     } else {
       dlog(`standalone: UNMAPPED action keys=${Object.keys(action).join(",")}`)
-    }
-  }
-
-  // ---------------------------------------------------------------------------
-  // Private: HTTP request handling (gitlab_api_request)
-  // ---------------------------------------------------------------------------
-
-  /**
-   * Execute a GitLab API request directly and send the response as httpResponse.
-   * DWS is the only action that expects httpResponse instead of plainTextResponse.
-   * Runs async in the background (fire-and-forget from #handleAction).
-   */
-  async #executeHttpRequest(requestId: string, request: { method: string; path: string; body?: string }): Promise<void> {
-    try {
-      const url = `${this.#client.instanceUrl}/api/v4/${request.path}`
-      dlog(`httpRequest: ${request.method} ${request.path} reqId=${requestId}`)
-
-      const init: RequestInit = {
-        method: request.method,
-        headers: {
-          "authorization": `Bearer ${this.#client.token}`,
-          "content-type": "application/json",
-        },
-      }
-      if (request.body) {
-        init.body = request.body
-      }
-
-      const response = await fetch(url, init)
-      const body = await response.text()
-      const headers: Record<string, string> = {}
-      response.headers.forEach((value, key) => { headers[key] = value })
-
-      dlog(`httpRequest: ${request.method} ${request.path} → ${response.status} body=${body.length}b`)
-      this.sendHttpResult(requestId, response.status, headers, body)
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      dlog(`httpRequest: ERROR ${request.method} ${request.path} → ${message}`)
-      this.sendHttpResult(requestId, 0, {}, "", message)
     }
   }
 
@@ -398,6 +367,10 @@ export class WorkflowSession {
             additional_context: [],
             preapproved_tools: mcpTools.map((t) => t.name),
             approval: { approval: {} },
+            ...(this.#toolsConfig?.flowConfig ? {
+              flowConfig: this.#toolsConfig.flowConfig,
+              flowConfigSchemaVersion: this.#toolsConfig.flowConfigSchemaVersion ?? "v1",
+            } : {}),
           },
         })
         this.#startRequestSent = true

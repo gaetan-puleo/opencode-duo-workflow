@@ -15,6 +15,7 @@ import { buildSystemContext } from "./system-context"
 import type { AdditionalContext } from "../workflow/types"
 import { dlog } from "../utils/debug-log"
 import { loadWorkflowId, saveWorkflowId } from "../workflow/session-store"
+import { buildFlowConfig } from "../workflow/flow-config"
 
 /**
  * Session cache keyed by `instanceUrl::modelId::sessionID`.
@@ -45,8 +46,6 @@ export class DuoWorkflowModel implements LanguageModelV2 {
   #sentToolCallIds = new Set<string>()
   #lastSentGoal: string | null = null
   #stateSessionId: string | undefined
-  #agentMode: "plan" | "build" | undefined
-  #agentModeReminder: string | undefined
 
   constructor(modelId: string, client: GitLabClientOptions, cwd?: string) {
     this.modelId = modelId
@@ -94,8 +93,6 @@ export class DuoWorkflowModel implements LanguageModelV2 {
       this.#multiCallGroups.clear()
       this.#sentToolCallIds.clear()
       this.#lastSentGoal = null
-      this.#agentMode = undefined
-      this.#agentModeReminder = undefined
       this.#stateSessionId = sessionID
     }
 
@@ -188,34 +185,27 @@ export class DuoWorkflowModel implements LanguageModelV2 {
               if (!session.hasStarted) {
                 const extraContext: AdditionalContext[] = []
 
+                const extractedSystemPrompt = extractSystemPrompt(options.prompt)
+                const sanitizedSystemPrompt = sanitizeSystemPrompt(
+                  extractedSystemPrompt ?? "You are GitLab Duo, an AI coding assistant.",
+                )
+
+                // Use flowConfig to send system prompt via system_template_override.
+                session.setToolsConfig({
+                  mcpTools: [],
+                  flowConfig: buildFlowConfig(sanitizedSystemPrompt),
+                  flowConfigSchemaVersion: "v1",
+                })
+
                 extraContext.push(...buildSystemContext())
 
-                const systemPrompt = extractSystemPrompt(options.prompt)
-                if (systemPrompt) {
-                  extraContext.push({
-                    category: "agent_context",
-                    content: sanitizeSystemPrompt(systemPrompt),
-                    id: "agent_system_prompt",
-                    metadata: JSON.stringify({
-                      title: "Agent System Prompt",
-                      enabled: true,
-                      subType: "system_prompt",
-                    }),
-                  })
-                }
-
                 const agentReminders = extractAgentReminders(options.prompt)
-                const modeReminder = detectLatestModeReminder(agentReminders)
-                if (modeReminder) {
-                  model.#agentMode = modeReminder.mode
-                  model.#agentModeReminder = modeReminder.reminder
-                }
-
-                const remindersForContext = buildReminderContext(agentReminders, model.#agentModeReminder)
-                if (remindersForContext.length > 0) {
+                if (agentReminders.length > 0) {
                   extraContext.push({
                     category: "agent_context",
-                    content: sanitizeSystemPrompt(remindersForContext.join("\n\n")),
+                    content: sanitizeSystemPrompt(
+                      `[context-id:${Date.now()}]\n${agentReminders.join("\n\n")}`
+                    ),
                     id: "agent_reminders",
                     metadata: JSON.stringify({
                       title: "Agent Reminders",
@@ -372,41 +362,4 @@ export class DuoWorkflowModel implements LanguageModelV2 {
 
 function sessionKey(instanceUrl: string, modelId: string, sessionID: string): string {
   return `${instanceUrl}::${modelId}::${sessionID}`
-}
-
-// ---------------------------------------------------------------------------
-// Mode reminder helpers
-// ---------------------------------------------------------------------------
-
-type AgentMode = "plan" | "build"
-
-function detectLatestModeReminder(
-  reminders: string[],
-): { mode: AgentMode; reminder: string } | undefined {
-  let latest: { mode: AgentMode; reminder: string } | undefined
-  for (const reminder of reminders) {
-    const classification = classifyModeReminder(reminder)
-    if (classification === "other") continue
-    latest = { mode: classification, reminder }
-  }
-  return latest
-}
-
-function buildReminderContext(reminders: string[], modeReminder?: string): string[] {
-  const nonModeReminders = reminders.filter(
-    (r) => classifyModeReminder(r) === "other",
-  )
-  if (!modeReminder) return nonModeReminders
-  return [...nonModeReminders, modeReminder]
-}
-
-function classifyModeReminder(reminder: string): AgentMode | "other" {
-  const text = reminder.toLowerCase()
-  if (text.includes("operational mode has changed from build to plan")) return "plan"
-  if (text.includes("operational mode has changed from plan to build")) return "build"
-  if (text.includes("you are no longer in read-only mode")) return "build"
-  if (text.includes("you are now in read-only mode")) return "plan"
-  if (text.includes("you are in read-only mode")) return "plan"
-  if (text.includes("you are permitted to make file changes")) return "build"
-  return "other"
 }
