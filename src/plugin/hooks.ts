@@ -68,7 +68,7 @@ function isUtilityAgent(agent: string | { name: string }): boolean {
 }
 
 function isGitLabProvider(model: { providerID: string; api?: { npm?: string } }): boolean {
-  if (model.api?.npm === "opencode-gitlab-duo-agentic-custom-tools") return true
+  if (model.api?.npm === "opencode-gitlab-duo-agentic") return true
   if (model.providerID === "gitlab" && model.api?.npm !== "@gitlab/gitlab-ai-provider") return true
   return model.providerID.toLowerCase().includes("gitlab-duo")
 }

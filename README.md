@@ -1,4 +1,4 @@
-# opencode-gitlab-duo-agentic-custom-tools
+# opencode-gitlab-duo-agentic
 
 OpenCode plugin for GitLab Duo Agentic. Registers a provider that routes models through the Duo Agentic Workflow Service, enabling native tool calling via WebSocket sessions.
 
@@ -9,7 +9,7 @@ Add the plugin to your `opencode.json`:
 ```json
 {
   "$schema": "https://opencode.ai/config.json",
-  "plugin": ["opencode-gitlab-duo-agentic-custom-tools"]
+  "plugin": ["opencode-gitlab-duo-agentic"]
 }
 ```
 

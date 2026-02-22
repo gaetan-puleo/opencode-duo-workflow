@@ -18,7 +18,7 @@ export async function applyRuntimeConfig(config: PluginConfig, directory: string
 
   config.provider[PROVIDER_ID] = {
     ...current,
-    npm: "opencode-gitlab-duo-agentic-custom-tools",
+    npm: "opencode-gitlab-duo-agentic",
     whitelist: modelIds,
     options: {
       ...options,
