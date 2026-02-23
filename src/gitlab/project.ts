@@ -1,6 +1,8 @@
-import fs from "node:fs/promises"
-import path from "node:path"
+import { execFile } from "node:child_process"
+import { promisify } from "node:util"
 import { type GitLabClientOptions, get } from "./client"
+
+const execFileAsync = promisify(execFile)
 
 type ProjectDetails = {
   projectId: string
@@ -13,32 +15,21 @@ type NamespaceResponse = {
 }
 
 /**
- * Detect GitLab project path from the git remote of the nearest repo.
- * Walks up from `cwd` looking for `.git/config`, parses the origin remote URL,
- * and extracts the project path relative to the instance.
+ * Detect GitLab project path from the git remote of the nearest repo/worktree.
+ * Uses the git CLI so linked worktrees resolve correctly.
  */
 export async function detectProjectPath(cwd: string, instanceUrl: string): Promise<string | undefined> {
   const instance = new URL(instanceUrl)
   const instanceHost = instance.host
   const instanceBasePath = instance.pathname.replace(/\/$/, "")
 
-  let current = cwd
-  for (;;) {
-    try {
-      const config = await readGitConfig(current)
-      const url = extractOriginUrl(config)
-      if (!url) return undefined
+  const url = await readRemoteUrl(cwd)
+  if (!url) return undefined
 
-      const remote = parseRemoteUrl(url)
-      if (!remote || remote.host !== instanceHost) return undefined
+  const remote = parseRemoteUrl(url)
+  if (!remote || remote.host !== instanceHost) return undefined
 
-      return normalizeProjectPath(remote.path, instanceBasePath)
-    } catch {
-      const parent = path.dirname(current)
-      if (parent === current) return undefined
-      current = parent
-    }
-  }
+  return normalizeProjectPath(remote.path, instanceBasePath)
 }
 
 /**
@@ -88,46 +79,35 @@ export async function resolveRootNamespaceId(client: GitLabClientOptions, namesp
 
 // -- git helpers --
 
-async function readGitConfig(cwd: string): Promise<string> {
-  const gitPath = path.join(cwd, ".git")
-  const stat = await fs.stat(gitPath)
+async function readRemoteUrl(cwd: string): Promise<string | undefined> {
+  const root = await runGit(cwd, ["rev-parse", "--path-format=absolute", "--show-toplevel"])
+  if (!root) return undefined
 
-  if (stat.isDirectory()) {
-    return fs.readFile(path.join(gitPath, "config"), "utf8")
-  }
+  const origin = await runGit(root, ["remote", "get-url", "origin"])
+  if (origin) return origin
 
-  // worktree: .git is a file pointing to the real gitdir
-  const content = await fs.readFile(gitPath, "utf8")
-  const match = /^gitdir:\s*(.+)$/m.exec(content)
-  if (!match) throw new Error("Invalid .git file")
+  const remotes = await runGit(root, ["config", "--get-regexp", "^remote\\..*\\.url$"])
+  if (!remotes) return undefined
 
-  const gitdir = match[1].trim()
-  const resolved = path.isAbsolute(gitdir) ? gitdir : path.join(cwd, gitdir)
-  return fs.readFile(path.join(resolved, "config"), "utf8")
+  const first = remotes
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .find(Boolean)
+  if (!first) return undefined
+
+  const match = /^remote\.[^.]+\.url\s+(.+)$/.exec(first)
+  return match?.[1]?.trim()
 }
 
-function extractOriginUrl(config: string): string | undefined {
-  const lines = config.split("\n")
-  let inOrigin = false
-  let originUrl: string | undefined
-  let firstUrl: string | undefined
-
-  for (const line of lines) {
-    const trimmed = line.trim()
-    const section = /^\[remote\s+"([^"]+)"\]$/.exec(trimmed)
-    if (section) {
-      inOrigin = section[1] === "origin"
-      continue
-    }
-    const urlMatch = /^url\s*=\s*(.+)$/.exec(trimmed)
-    if (urlMatch) {
-      const value = urlMatch[1].trim()
-      if (!firstUrl) firstUrl = value
-      if (inOrigin) originUrl = value
-    }
+async function runGit(cwd: string, args: string[]): Promise<string | undefined> {
+  try {
+    const { stdout } = await execFileAsync("git", ["-C", cwd, ...args], { encoding: "utf8" })
+    const output = String(stdout).trim()
+    if (!output) return undefined
+    return output
+  } catch {
+    return undefined
   }
-
-  return originUrl ?? firstUrl
 }
 
 function parseRemoteUrl(url: string): { host: string; path: string } | undefined {
