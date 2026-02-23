@@ -13,7 +13,6 @@ import { mapDuoToolRequest, type MappedToolCall } from "./tool-mapping"
 import { readSessionID } from "./session-context"
 import { buildSystemContext } from "./system-context"
 import type { AdditionalContext } from "../workflow/types"
-import { dlog } from "../utils/debug-log"
 import { loadWorkflowId, saveWorkflowId } from "../workflow/session-store"
 import { buildFlowConfig } from "../workflow/flow-config"
 
@@ -85,7 +84,6 @@ export class DuoWorkflowModel implements LanguageModelV2 {
     const toolResults = extractToolResults(options.prompt)
     const session = this.#resolveSession(sessionID)
     const textId = randomUUID()
-    dlog(`doStream: goal=${goal?.length ?? 0}ch toolResults=${toolResults.length} hasStarted=${session.hasStarted} pending=${this.#pendingToolRequests.size} sent=${this.#sentToolCallIds.size}`)
 
     // Reset tracking state on session change
     if (sessionID !== this.#stateSessionId) {
@@ -129,7 +127,6 @@ export class DuoWorkflowModel implements LanguageModelV2 {
             const freshResults = toolResults.filter(
               (r) => !model.#sentToolCallIds.has(r.toolCallId),
             )
-            dlog(`phase1: ${toolResults.length} total, ${freshResults.length} fresh`)
             let sentToolResults = false
 
             for (const result of freshResults) {
@@ -166,12 +163,10 @@ export class DuoWorkflowModel implements LanguageModelV2 {
               // Single tool result
               const pending = model.#pendingToolRequests.get(result.toolCallId)
               if (!pending) {
-                dlog(`phase1: SKIP ${result.toolCallId} (not pending)`)
                 model.#sentToolCallIds.add(result.toolCallId)
                 continue
               }
 
-              dlog(`phase1: SEND ${result.toolCallId} output=${result.output.length}b`)
               session.sendToolResult(result.toolCallId, result.output, result.error)
               sentToolResults = true
               model.#sentToolCallIds.add(result.toolCallId)
@@ -242,11 +237,8 @@ export class DuoWorkflowModel implements LanguageModelV2 {
                 try {
                   mapped = mapDuoToolRequest(event.toolName, event.args)
                 } catch {
-                  dlog(`phase3: MAPPING FAILED ${event.toolName}`)
                   continue
                 }
-                const mName = Array.isArray(mapped) ? mapped.map(m => m.toolName).join(",") : mapped.toolName
-                dlog(`phase3: tool-request ${event.toolName} → ${mName} reqId=${event.requestId}`)
 
                 if (hasText) {
                   controller.enqueue({ type: "text-end", id: textId })
@@ -343,14 +335,10 @@ export class DuoWorkflowModel implements LanguageModelV2 {
     if (existing) return existing
 
     const existingWorkflowId = loadWorkflowId(key)
-    if (existingWorkflowId) {
-      dlog(`resolveSession: restored workflowId=${existingWorkflowId} from disk for ${sessionID}`)
-    }
 
     const created = new WorkflowSession(this.#client, this.modelId, this.#cwd, {
       existingWorkflowId,
       onWorkflowCreated: (workflowId) => {
-        dlog(`resolveSession: saving workflowId=${workflowId} for ${sessionID}`)
         saveWorkflowId(key, workflowId)
       },
     })

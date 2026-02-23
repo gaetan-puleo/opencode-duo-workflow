@@ -1,22 +1,12 @@
-import { randomUUID } from "node:crypto"
 import type { UiChatLogEntry, WorkflowCheckpointPayload } from "./types"
 
 export type CheckpointState = {
   uiChatLog: UiChatLogEntry[]
-  /** Indices of "request" entries already processed (to avoid re-execution). */
-  processedRequestIndices: Set<number>
-}
-
-export type CheckpointToolRequest = {
-  requestId: string
-  toolName: string
-  args: Record<string, unknown>
 }
 
 export function createCheckpointState(): CheckpointState {
   return {
     uiChatLog: [],
-    processedRequestIndices: new Set(),
   }
 }
 
@@ -47,34 +37,6 @@ export function extractAgentTextDeltas(checkpoint: string, state: CheckpointStat
 
   state.uiChatLog = next
   return out
-}
-
-/**
- * Extract new tool requests from a checkpoint.
- *
- * DWS embeds tool requests in checkpoint messages as ui_chat_log entries
- * with message_type "request". Each has tool_info (name + args) and a
- * correlation_id used as the requestId for the actionResponse.
- */
-export function extractToolRequests(checkpoint: string, state: CheckpointState): CheckpointToolRequest[] {
-  const next = parseCheckpoint(checkpoint)
-  const requests: CheckpointToolRequest[] = []
-
-  for (let i = 0; i < next.length; i++) {
-    const item = next[i]
-    if (item.message_type !== "request") continue
-    if (!item.tool_info) continue
-    if (state.processedRequestIndices.has(i)) continue
-
-    state.processedRequestIndices.add(i)
-    requests.push({
-      requestId: item.correlation_id ?? randomUUID(),
-      toolName: item.tool_info.name,
-      args: item.tool_info.args ?? {},
-    })
-  }
-
-  return requests
 }
 
 function parseCheckpoint(raw: string): UiChatLogEntry[] {

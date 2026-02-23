@@ -1,4 +1,4 @@
-export const WORKFLOW_STATUS = {
+const WORKFLOW_STATUS = {
   CREATED: "CREATED",
   RUNNING: "RUNNING",
   FINISHED: "FINISHED",
@@ -9,7 +9,7 @@ export const WORKFLOW_STATUS = {
   TOOL_CALL_APPROVAL_REQUIRED: "TOOL_CALL_APPROVAL_REQUIRED",
 } as const
 
-export type WorkflowStatus = (typeof WORKFLOW_STATUS)[keyof typeof WORKFLOW_STATUS]
+type WorkflowStatus = (typeof WORKFLOW_STATUS)[keyof typeof WORKFLOW_STATUS]
 
 export type AdditionalContext = {
   category: string
@@ -100,11 +100,6 @@ export function isCheckpointAction(action: WorkflowAction): action is WorkflowCh
   return "newCheckpoint" in action && action.newCheckpoint != null
 }
 
-/** Type guard: true when the action carries a runMCPTool payload. */
-export function isMcpToolAction(action: WorkflowAction): action is WorkflowToolAction & { runMCPTool: { name: string; args?: string } } {
-  return "runMCPTool" in action && action.runMCPTool != null
-}
-
 /** Terminal statuses — workflow is done, no more interaction possible. */
 const TERMINAL_STATUSES: ReadonlySet<string> = new Set<WorkflowStatus>([
   WORKFLOW_STATUS.FINISHED,
@@ -112,7 +107,7 @@ const TERMINAL_STATUSES: ReadonlySet<string> = new Set<WorkflowStatus>([
   WORKFLOW_STATUS.STOPPED,
 ])
 
-export function isTerminal(status: string): boolean {
+function isTerminal(status: string): boolean {
   return TERMINAL_STATUSES.has(status)
 }
 
@@ -122,7 +117,7 @@ const TURN_BOUNDARY_STATUSES: ReadonlySet<string> = new Set<WorkflowStatus>([
   WORKFLOW_STATUS.PLAN_APPROVAL_REQUIRED,
 ])
 
-export function isTurnBoundary(status: string): boolean {
+function isTurnBoundary(status: string): boolean {
   return TURN_BOUNDARY_STATUSES.has(status)
 }
 

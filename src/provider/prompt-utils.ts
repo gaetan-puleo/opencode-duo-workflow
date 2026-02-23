@@ -8,32 +8,11 @@ type PromptMessage = {
   content?: unknown
 }
 
-export type ExtractedToolResult = {
+type ExtractedToolResult = {
   toolCallId: string
   toolName: string
   output: string
   error?: string
-}
-
-/**
- * Extract the last user text message from an AI SDK prompt.
- * Strips <system-reminder> tags and ignores synthetic/ignored parts.
- */
-export function extractLastUserText(prompt: unknown[]): string | null {
-  if (!Array.isArray(prompt)) return null
-
-  for (let i = prompt.length - 1; i >= 0; i--) {
-    const message = prompt[i] as PromptMessage
-    if (message?.role !== "user" || !Array.isArray(message.content)) continue
-
-    const texts = (message.content as Array<Record<string, unknown>>)
-      .filter((part) => part.type === "text" && !part.synthetic && !part.ignored)
-      .map((part) => stripSystemReminder(String(part.text ?? "")))
-      .filter((text) => text.trim().length > 0)
-
-    if (texts.length > 0) return texts.join("").trim()
-  }
-  return null
 }
 
 /**
@@ -206,10 +185,6 @@ export function extractAgentReminders(prompt: unknown[]): string[] {
   }
 
   return reminders
-}
-
-function stripSystemReminder(text: string): string {
-  return text.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, "").trim()
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {

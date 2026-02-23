@@ -7,11 +7,10 @@ import {
 import { type GitLabClientOptions, post } from "../gitlab/client"
 import { fetchProjectDetails, detectProjectPath, resolveRootNamespaceId } from "../gitlab/project"
 import { AsyncQueue } from "../utils/async-queue"
-import { createCheckpointState, extractAgentTextDeltas, extractToolRequests, type CheckpointState } from "./checkpoint"
+import { createCheckpointState, extractAgentTextDeltas, type CheckpointState } from "./checkpoint"
 import { WorkflowTokenService } from "./token-service"
 import type {
   AdditionalContext,
-  ClientEvent,
   McpToolDefinition,
   WorkflowAction,
   WorkflowToolAction,
@@ -20,7 +19,6 @@ import type {
 import { isCheckpointAction, isTurnComplete, isToolApproval } from "./types"
 import { WorkflowWebSocketClient } from "./websocket-client"
 import { mapActionToToolRequest } from "./action-mapper"
-import { dlog } from "../utils/debug-log"
 
 /**
  * Optional configuration for overriding the server-side system prompt
@@ -34,7 +32,7 @@ export type WorkflowToolsConfig = {
 }
 
 /** Events emitted by the session's event stream. */
-export type SessionEvent =
+type SessionEvent =
   | { type: "text-delta"; value: string }
   | { type: "tool-request"; requestId: string; toolName: string; args: Record<string, unknown> }
   | { type: "error"; message: string }
@@ -126,8 +124,7 @@ export class WorkflowSession {
     const socket = new WorkflowWebSocketClient({
       action: (action) => this.#handleAction(action, queue),
       error: (error) => queue.push({ type: "error", message: error.message }),
-      close: (code, reason) => {
-        dlog(`ws-close: code=${code} reason=${reason} pendingApproval=${this.#pendingApproval}`)
+      close: (_code, _reason) => {
         this.#socket = undefined
         if (this.#pendingApproval) {
           this.#pendingApproval = false
@@ -189,7 +186,6 @@ export class WorkflowSession {
    * Send a tool result back to DWS on the existing connection.
    */
   sendToolResult(requestId: string, output: string, error?: string): void {
-    dlog(`sendToolResult: reqId=${requestId} output=${output.length}b error=${error ?? "none"} socket=${!!this.#socket}`)
     if (!this.#socket) throw new Error("Not connected")
     this.#socket.send({
       actionResponse: {
@@ -207,7 +203,6 @@ export class WorkflowSession {
    * Used for gitlab_api_request which requires httpResponse (not plainTextResponse).
    */
   sendHttpResult(requestId: string, statusCode: number, headers: Record<string, string>, body: string, error?: string): void {
-    dlog(`sendHttpResult: reqId=${requestId} status=${statusCode} body=${body.length}b error=${error ?? "none"} socket=${!!this.#socket}`)
     if (!this.#socket) throw new Error("Not connected")
     this.#socket.send({
       actionResponse: {
@@ -249,21 +244,15 @@ export class WorkflowSession {
       const ckpt = action.newCheckpoint.checkpoint
       const status = action.newCheckpoint.status
 
-      dlog(`checkpoint: status=${status} ckptLen=${ckpt.length}`)
-
       // Extract agent text deltas (always — to keep checkpoint state current).
       const deltas = extractAgentTextDeltas(ckpt, this.#checkpoint)
       if (this.#resumed) {
         // First checkpoint after resume: state is now populated with old text.
         // Discard deltas to avoid re-emitting old messages to OpenCode.
-        dlog(`checkpoint: RESUMED — discarding ${deltas.length} old deltas, fast-forwarding state`)
         this.#resumed = false
       } else {
         for (const delta of deltas) {
           queue.push({ type: "text-delta", value: delta })
-        }
-        if (deltas.length > 0) {
-          dlog(`checkpoint: ${deltas.length} text deltas`)
         }
       }
 
@@ -272,25 +261,11 @@ export class WorkflowSession {
         // checkpoint — the actual tool will arrive as a standalone action
         // after we auto-approve. Don't close the queue; DWS will close
         // the stream, triggering #reconnectWithApproval via the close callback.
-        dlog(`checkpoint: TOOL_APPROVAL → pendingApproval=true (waiting for DWS close)`)
         this.#pendingApproval = true
         return
       }
 
-      // Checkpoint "request" entries are for UI display only (VS Code approval UI).
-      // Real tool calls arrive as standalone WebSocket actions with proper requestIDs.
-      // const toolRequests = extractToolRequests(ckpt, this.#checkpoint)
-      // for (const req of toolRequests) {
-      //   queue.push({
-      //     type: "tool-request",
-      //     requestId: req.requestId,
-      //     toolName: req.toolName,
-      //     args: req.args,
-      //   })
-      // }
-
       if (isTurnComplete(status)) {
-        dlog(`checkpoint: turnComplete → close queue+connection`)
         queue.close()
         this.#closeConnection()
       }
@@ -300,13 +275,11 @@ export class WorkflowSession {
     // --- Blocked actions: never execute these locally ---
     const toolAction = action as WorkflowToolAction
     if (toolAction.runHTTPRequest && toolAction.requestID) {
-      dlog(`standalone: BLOCKED httpRequest ${toolAction.runHTTPRequest.method} ${toolAction.runHTTPRequest.path} reqId=${toolAction.requestID}`)
       this.sendHttpResult(toolAction.requestID, 403, {}, "", BLOCKED_HTTP_REQUEST_ERROR)
       return
     }
 
     if (toolAction.runGitCommand && toolAction.requestID) {
-      dlog(`standalone: BLOCKED runGitCommand ${toolAction.runGitCommand.command} reqId=${toolAction.requestID}`)
       this.sendToolResult(toolAction.requestID, "", BLOCKED_GIT_COMMAND_ERROR)
       return
     }
@@ -316,15 +289,12 @@ export class WorkflowSession {
     // execution and permission system (instead of executing locally).
     const mapped = mapActionToToolRequest(toolAction)
     if (mapped) {
-      dlog(`standalone: ${mapped.toolName} reqId=${mapped.requestId} args=${JSON.stringify(mapped.args).slice(0, 200)}`)
       queue.push({
         type: "tool-request",
         requestId: mapped.requestId,
         toolName: mapped.toolName,
         args: mapped.args,
       })
-    } else {
-      dlog(`standalone: UNMAPPED action keys=${Object.keys(action).join(",")}`)
     }
   }
 
@@ -343,17 +313,14 @@ export class WorkflowSession {
    * when the standalone action arrives on the new stream.
    */
   #reconnectWithApproval(queue: AsyncQueue<SessionEvent>): void {
-    dlog(`reconnectWithApproval: starting (workflowId=${this.#workflowId})`)
     this.#connectSocket(queue)
       .then(() => {
         if (!this.#socket || !this.#workflowId) {
-          dlog(`reconnectWithApproval: FAILED no socket/workflowId`)
           queue.close()
           return
         }
 
         const mcpTools = this.#toolsConfig?.mcpTools ?? []
-        dlog(`reconnectWithApproval: sending startRequest with approval (mcpTools=${mcpTools.length})`)
 
         this.#socket.send({
           startRequest: {
@@ -374,10 +341,8 @@ export class WorkflowSession {
           },
         })
         this.#startRequestSent = true
-        dlog(`reconnectWithApproval: approval sent, waiting for standalone actions`)
       })
-      .catch((err) => {
-        dlog(`reconnectWithApproval: ERROR ${err instanceof Error ? err.message : String(err)}`)
+      .catch(() => {
         this.#queue = undefined
         queue.close()
       })

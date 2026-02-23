@@ -3,7 +3,7 @@ export type GitLabClientOptions = {
   token: string
 }
 
-export class GitLabApiError extends Error {
+class GitLabApiError extends Error {
   constructor(
     public readonly status: number,
     message: string,

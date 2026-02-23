@@ -1,0 +1,6 @@
+{
+  "project": ["src/**/*.ts"],
+  "rules": {
+    "duplicates": "off"
+  }
+}

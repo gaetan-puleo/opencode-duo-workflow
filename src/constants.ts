@@ -9,4 +9,3 @@ export const WORKFLOW_CONNECT_TIMEOUT_MS = 15_000
 export const WORKFLOW_HEARTBEAT_INTERVAL_MS = 60_000
 export const WORKFLOW_KEEPALIVE_INTERVAL_MS = 45_000
 export const WORKFLOW_TOKEN_EXPIRY_BUFFER_MS = 30_000
-export const WORKFLOW_TOOL_ERROR_MESSAGE = "Tool execution is not implemented in this client yet"

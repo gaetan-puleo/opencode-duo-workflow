@@ -9,7 +9,7 @@
 
 import type { WorkflowToolAction } from "./types"
 
-export type MappedToolRequest = {
+type MappedToolRequest = {
   requestId: string
   toolName: string
   args: Record<string, unknown>

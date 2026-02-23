@@ -20,6 +20,9 @@
   "scripts": {
     "build": "tsup",
     "typecheck": "tsc --noEmit",
+    "deadcode": "npm run deadcode:ts && npm run deadcode:knip",
+    "deadcode:knip": "knip",
+    "deadcode:ts": "tsc --noEmit --noUnusedLocals --noUnusedParameters",
     "pack:check": "npm pack --dry-run",
     "prepack": "npm run build"
   },
@@ -47,6 +50,7 @@
   },
   "devDependencies": {
     "@types/node": "^24.3.0",
+    "knip": "^5.85.0",
     "tsup": "^8.5.0",
     "typescript": "^5.9.2"
   }
